@@ -307,6 +307,22 @@ reads and writes one byte, 0..255), with `len`, `readblob`, `writeblob`,
   one float32 add, subtract, multiply or divide, rounded once, is the float32
   result; the operands are already float32 values). Inputs are `fround`ed on
   entry, as Go's `float32` parameters are.
+- **A non-finite compressed_float input RAISES on write** (coordinator
+  ruling, uniform across the Luau, Lua and Squirrel ports; STANDARD.md,
+  compressed_float, "Non-finite inputs are non-conforming": "Conforming
+  writers assert in checked builds", Glenn verbatim "should assert out on
+  write too"). The value a `serializeCompressedFloat` or
+  `serializeCompressedFloatPrecomputed` write is given is `fround`ed first;
+  if the result is NaN, `+inf` or `-inf` the arm raises
+  `serialize: compressed float value is not finite` before any bit moves, in
+  every stream state, and nothing is latched or written. This is a deliberate
+  deviation from serialize.go, which clamps such a value (a NaN normalizes
+  into the range and is written as some integer): this writer is the checked
+  build, (g), so the emulation of `compressedFloat32Precomputed` above covers
+  finite inputs only and never copies the clamp for a non-finite one. The
+  measure stream raises the same way (it raises on misuse like the writer).
+  The read path is untouched: the poison is in the input value, never on the
+  wire, so a read decodes every integer it accepts as usual and never raises.
 
 ## (f) LOADING IS CLOSED
 
@@ -352,10 +368,14 @@ rule with serialize.go's panic text, where serialize.go panics on API misuse
 (bits outside [1,32] or [1,64]; min > max; a Q format or bounds the format
 cannot hold; a buffer size outside [1, 2^31); compressed float parameters with
 min >= max or resolution <= 0; precomputed constants that are not what
-`compressedFloatParams` derives; a previous outside the int_relative domain;
-bytes on an unaligned stream; a buffer that is not a multiple of 8 bytes).
+`compressedFloatParams` derives; a compressed float value that is NaN,
+`+inf` or `-inf` after `fround`, which serialize.go clamps instead, (e); a
+previous outside the int_relative domain; bytes on an unaligned stream; a
+buffer that is not a multiple of 8 bytes).
 What serialize.go silently masks (the high bits of a `serializeBits` value
-above its width) this port masks too. A raise is API misuse and happens in
+above its width) this port masks too; serialize.go's clamp of a non-finite
+compressed float is NOT copied: that is a raise above, uniform across the
+Luau, Lua and Squirrel ports. A raise is API misuse and happens in
 every stream state; only data latches.
 
 **Reads are forgiving only where serialize.go's are**, and only where it is
