@@ -24,8 +24,9 @@
 //     exactly where serialize.go's WriteStream returns ErrOverflow).
 //
 // The driver takes programs as text, one interpreter process per batch of 100
-// programs, the batch in a file in a t.TempDir() (DESIGN.md (i), the runner),
-// and prints results as lowercase hex lines.
+// programs, the batch in a file in a t.TempDir() (the card's batching; the
+// interpreter is the pin DESIGN.md (i) runs), and prints results as lowercase
+// hex lines.
 //
 // THE NEGATIVE CONTROL. The test-only flag -sabotage-widen-int makes the Go
 // side write every non-degenerate int range one bit wider; with it the test
@@ -63,7 +64,7 @@ const (
 	programCount = 2000
 	batchSize    = 100
 	maxOps       = 24
-	writeCap     = 8192 // bytes; a multiple of 8 (STANDARD.md General Conventions)
+	writeCap     = 8192 // bytes; a multiple of 8 (serialize.go panicBufferBytes; DESIGN.md (g))
 	seed1        = 0x5e7a11a15e7a11a1
 	seed2        = 0x00d1ff0000d1ff00
 )
@@ -90,11 +91,11 @@ type step struct {
 var minInt128 = serialize.Int128{Lo: 0, Hi: 1 << 63}
 var maxInt128 = serialize.Int128{Lo: math.MaxUint64, Hi: math.MaxInt64}
 
-func hex128(lo, hi uint64) string { return fmt.Sprintf("%016x%016x", hi, lo) }
-func hexI(x serialize.Int128) string { return hex128(x.Lo, x.Hi) }
+func hex128(lo, hi uint64) string     { return fmt.Sprintf("%016x%016x", hi, lo) }
+func hexI(x serialize.Int128) string  { return hex128(x.Lo, x.Hi) }
 func hexU(x serialize.Uint128) string { return hex128(x.Lo, x.Hi) }
-func hexS(x int64) string        { return hexI(serialize.Int128From64(x)) }
-func hexBytes(b []byte) string    { return "x" + fmt.Sprintf("%x", b) }
+func hexS(x int64) string             { return hexI(serialize.Int128From64(x)) }
+func hexBytes(b []byte) string        { return "x" + fmt.Sprintf("%x", b) }
 
 // text renders a step as the driver's program spelling (fuzz/driver.nut, THE
 // PROGRAM TEXT).
@@ -826,6 +827,9 @@ func parseResult(fields []string, n int) (result, error) {
 }
 
 func decodeX(tok string) ([]byte, error) {
+	if strings.ToLower(tok) != tok {
+		return nil, fmt.Errorf("byte string %q is not lowercase hex", tok)
+	}
 	return hex.DecodeString(tok[1:])
 }
 
@@ -895,7 +899,7 @@ func (p *program) header() string {
 
 // firstDifferingStep maps the first differing bit of two byte strings onto the
 // step of the writer whose bits hold it.
-func firstDifferingStep(a, b []byte, endBits []int64) string {
+func firstDifferingStep(a, b []byte, steps []step, endBits []int64) string {
 	bit := int64(-1)
 	for i := 0; i < max(len(a), len(b)); i++ {
 		var x, y byte
@@ -917,7 +921,9 @@ func firstDifferingStep(a, b []byte, endBits []int64) string {
 		}
 	}
 	for i, e := range endBits {
-		if e > bit {
+		// an object's end is past every step it contains: the step that holds
+		// the bit is the first leaf ending past it
+		if steps[i].kind != "object" && e > bit {
 			return fmt.Sprintf("step %d (bit %d)", i, bit)
 		}
 	}
@@ -930,9 +936,14 @@ func compareWrite(p *program, goW, sqW result) string {
 	}
 	if !bytes.Equal(goW.bytes, sqW.bytes) {
 		return fmt.Sprintf("%s\n  go bytes:       %x\n  squirrel bytes: %x\n  first differing step: %s",
-			p.header(), goW.bytes, sqW.bytes, firstDifferingStep(goW.bytes, sqW.bytes, goW.endBits))
+			p.header(), goW.bytes, sqW.bytes, firstDifferingStep(goW.bytes, sqW.bytes, p.steps, goW.endBits))
 	}
 	return ""
+}
+
+// bothBytes is the pair of byte strings every disagreement prints.
+func bothBytes(p *program, sq []byte) string {
+	return fmt.Sprintf("\n  go bytes:       %x\n  squirrel bytes: %x", p.goW.bytes, sq)
 }
 
 func compareValues(p *program, who string, got, want []string) string {
@@ -977,7 +988,7 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 		sq = filepath.Join(root, "dist", "squirrel-3.2", "bin", "sq")
 	}
 	if fi, err := os.Stat(sq); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
-		// refused by name, never a skip (DESIGN.md (i), THE TOOLCHAIN GATE)
+		// refused by name, never a skip (DESIGN.md (i): make toolchain-squirrel refuses by name)
 		t.Fatalf("the pinned interpreter SQ=%s does not resolve; run make dist-squirrel", sq)
 	}
 	driver := filepath.Join(root, "fuzz", "driver.nut")
@@ -994,6 +1005,11 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 			t.Fatalf("%s\n  serialize.go refused its own in-range program at step %d (%s): a generator bug", p.header(), p.goW.idx, p.goW.kind)
 		}
 		self := goRead(steps, p.goW.bytes)
+		if *sabotageWidenInt {
+			// the expected values come from the honest writer; only the bytes
+			// under comparison are sabotaged
+			self = goRead(steps, goWrite(steps, writeCap, false).bytes)
+		}
 		if !self.ok || self.bits != p.goW.bits {
 			if !*sabotageWidenInt {
 				t.Fatalf("%s\n  serialize.go does not read back its own bytes %x (ok=%v step %d %s)", p.header(), p.goW.bytes, self.ok, self.idx, self.kind)
@@ -1080,22 +1096,27 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 			sqW, _ := get(id+"w", n)
 			add(compareWrite(p, p.goW, sqW))
 			sqBytes[p.n] = sqW.bytes
+			both := bothBytes(p, sqW.bytes)
 			// (2) each side reads the other's bytes and decodes the program
 			sqR, _ := get(id+"r", n)
 			if !sqR.ok {
-				add(fmt.Sprintf("%s\n  squirrel refused serialize.go's bytes %x at step %d with %s", p.header(), p.goW.bytes, sqR.idx, sqR.kind))
+				add(fmt.Sprintf("%s%s\n  squirrel refused serialize.go's bytes at step %d with %s", p.header(), both, sqR.idx, sqR.kind))
 			} else {
-				add(compareValues(p, "squirrel reading go's bytes", sqR.vals, p.canon))
+				if d := compareValues(p, "squirrel reading go's bytes", sqR.vals, p.canon); d != "" {
+					add(d + both)
+				}
 				if sqR.bits != p.goW.bits {
-					add(fmt.Sprintf("%s\n  squirrel consumed %d bits of go's bytes, go wrote %d", p.header(), sqR.bits, p.goW.bits))
+					add(fmt.Sprintf("%s%s\n  squirrel consumed %d bits of go's bytes, go wrote %d", p.header(), both, sqR.bits, p.goW.bits))
 				}
 			}
 			if sqW.ok {
 				goR := goRead(p.steps, sqW.bytes)
 				if !goR.ok {
-					add(fmt.Sprintf("%s\n  go refused squirrel's bytes %x at step %d with %s", p.header(), sqW.bytes, goR.idx, goR.kind))
+					add(fmt.Sprintf("%s%s\n  go refused squirrel's bytes at step %d with %s", p.header(), both, goR.idx, goR.kind))
 				} else {
-					add(compareValues(p, "go reading squirrel's bytes", goR.vals, p.canon))
+					if d := compareValues(p, "go reading squirrel's bytes", goR.vals, p.canon); d != "" {
+						add(d + both)
+					}
 				}
 			}
 			// (3) both readers agree on a mutant
@@ -1151,6 +1172,9 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 				continue
 			}
 			eligible++
+			if sqBytes[p.n] == nil {
+				continue // a refused squirrel write is already a disagreement above
+			}
 			sab := goWrite(p.steps, writeCap, true)
 			if d := compareWrite(p, sab, result{ok: true, bytes: sqBytes[p.n]}); d != "" {
 				red++

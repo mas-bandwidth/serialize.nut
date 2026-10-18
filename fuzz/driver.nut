@@ -5,8 +5,8 @@
 //
 // The batch file holds one request per line; the driver answers each with one
 // line on stdout, every value in lowercase hex, then `done <count>`. It is run
-// once per batch of 100 programs (DESIGN.md (i), the runner: one interpreter
-// process, the test's own scratch file), and it raises nothing on data: sq
+// once per batch of 100 programs (one interpreter process, the batch in the
+// test's own scratch file; the interpreter is the pin of DESIGN.md (i)), and it raises nothing on data: sq
 // exits 0 on an uncaught throw (DESIGN.md (i)), so the Go side fails a batch
 // whose stderr is not empty or that lacks the completion line.
 //
@@ -231,10 +231,10 @@ local runOne = function(stream, s, i, st) {
     if (ok) out = unsignedN(h.value);
     untouched = function() { return h.value == SENTINEL; };
   } else if (k == "bool") {
-    h = { value = w ? s.b : true };
+    h = { value = w ? s.b : null };
     ok = stream.serializeBool(h);
     if (ok) out = h.value ? "1" : "0";
-    untouched = function() { return h.value == true; };
+    untouched = function() { return h.value == null; };
   } else if (k == "uint128" || k == "int128" || k == "fixed128") {
     h = { value = w ? [s.v[0], s.v[1]] : [SENTINEL, SENTINEL] };
     if (k == "uint128") ok = stream.serializeUint128(h);
@@ -274,11 +274,15 @@ local runOne = function(stream, s, i, st) {
     if (ok) out = unsignedN(castf2i(h.value));
     untouched = function() { return h.value == SENTINEL_F; };
   } else if (k == "bytes") {
-    local data = w ? s.data : blob(s.data.len());
+    local data = s.data;
+    if (!w) {
+      data = blob(s.data.len());
+      for (local j = 0; j < data.len(); j++) data[j] = 0xa5;
+    }
     ok = stream.serializeBytes(data);
     if (ok) out = xOfBlob(data);
     untouched = function() {
-      for (local j = 0; j < data.len(); j++) if ((data[j] & 0xff) != 0) return false;
+      for (local j = 0; j < data.len(); j++) if ((data[j] & 0xff) != 0xa5) return false;
       return true;
     };
   } else if (k == "string" || k == "wstring") {
