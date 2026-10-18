@@ -1,8 +1,20 @@
 // TestConformanceCorpus: serialize-squirrel-conformance (DESIGN.md (i), the
-// runner). It discovers every conformance/*.txt (never a fixed list), runs
-// every record as the runner must (STANDARD.md, "What a runner checks"; "The
-// vector format"), and fails unless every record ran. A test passes by
-// returning and fails by throwing (DESIGN.md (i)).
+// runner). It discovers every conformance/*.txt (never a fixed list), parses
+// every record (STANDARD.md, "The vector format"), and checks what a runner
+// must (STANDARD.md, "What a runner checks"): an accepted read decodes the
+// stated value or bit pattern and consumes exactly `consumed` bits; a
+// `writer canonical` record is re-emitted byte for byte; a refused read is
+// refused, leaves its destination untouched and makes the stream terminal; a
+// sequence's steps run in order on one stream; and `measure_at_least` is a
+// floor for MeasureStream. The two controls STANDARD.md requires live here
+// too: a corpus file whose operation has no runner is REJECTED, and a reader
+// with the align-padding refusal switched off through a test-only hook goes
+// red on exactly the vectors that pin that rule.
+//
+// The step machine is the one serialize.go v1.15.1's conformance_test.go uses
+// (TestConformanceCorpus): a single-operation record is a short step list, so
+// there is one execution path for the operation files and the sequence files.
+// A test passes by returning and fails by throwing (DESIGN.md (i)).
 
 local check = function(cond, what) {
   if (!cond) throw "TestConformanceCorpus: " + what;
@@ -10,8 +22,8 @@ local check = function(cond, what) {
 
 local MIN64 = 0x8000000000000000;
 
-// --- 128-bit number parsing (for the vectors' values; never a codec
-// reimplementation) -----------------------------------------------------------
+// --- 128-bit number parsing (the vectors are up to 128 bits wide; this is
+// number syntax, never a codec) ------------------------------------------------
 local ucmp = function(a, b) {
   local ax = a[1] ^ MIN64;
   local ay = b[1] ^ MIN64;
@@ -46,6 +58,8 @@ local lsh = function(x, n) {
 
 local mul10 = function(x) { return uadd(lsh(x, 3), lsh(x, 1)); };
 local neg128 = function(x) { return usub([0, 0], x); };
+local same128 = function(a, b) { return a[0] == b[0] && a[1] == b[1]; };
+local int128From64 = function(x) { return [x, x < 0 ? -1 : 0]; };
 
 local hexDig = function(c) {
   if (c >= '0' && c <= '9') return c - '0';
@@ -80,8 +94,15 @@ local parseNumber = function(tok) {
   local t = tok;
   local neg = false;
   if (t.len() > 0 && t.slice(0, 1) == "-") { neg = true; t = t.slice(1); }
+  else if (t.len() > 0 && t.slice(0, 1) == "+") t = t.slice(1);
   local v = (t.len() >= 2 && t.slice(0, 2) == "0x") ? hexTo128(t.slice(2)) : parseDec(t);
   if (neg) v = neg128(v);
+  return v;
+};
+
+local signed32 = function(x) {
+  local v = x & 0xffffffff;
+  if (v & 0x80000000) v = v - 0x100000000;
   return v;
 };
 
@@ -123,37 +144,36 @@ local blobOfHexs = function(hexs) {
   return b;
 };
 
-local blobOfValues = function(vals) {
-  local b = blob(vals.len());
-  for (local i = 0; i < vals.len(); i++) {
-    check(vals[i].len() == 2, "a byte value must be two hex digits, got " + vals[i]);
-    b[i] = (hexDig(vals[i][0]) << 4) | hexDig(vals[i][1]);
-  }
-  return b;
-};
-
 local hexValue = function(tok) {
   local v = 0;
   foreach (c in tok) v = (v << 4) | hexDig(c);
   return v;
 };
 
-local sameBytes = function(got, want, what) {
-  check(got.len() == want.len(), what + ": length " + got.len() + ", want " + want.len());
-  for (local i = 0; i < want.len(); i++) {
-    check((got[i] & 0xff) == (want[i] & 0xff), what + ": byte " + i);
+local hexLane = function(x) {
+  local digs = "0123456789ABCDEF";
+  local out = "";
+  for (local i = 15; i >= 0; i--) out += digs[((x >>> (i * 4)) & 15)].tochar();
+  return out;
+};
+
+local hex128 = function(p) { return hexLane(p[1]) + hexLane(p[0]); };
+
+local blobToHex = function(b) {
+  local hex = "0123456789ABCDEF";
+  local o = "";
+  for (local i = 0; i < b.len(); i++) {
+    if (i > 0) o += " ";
+    o += hex[(b[i] >> 4) & 15].tochar();
+    o += hex[b[i] & 15].tochar();
   }
+  return o;
 };
 
-local sameArray = function(got, want, what) {
-  check(got.len() == want.len(), what + ": length " + got.len() + ", want " + want.len());
-  for (local i = 0; i < want.len(); i++) check(got[i] == want[i], what + ": item " + i);
-};
-
-local stringFromBytes = function(bytes) {
-  local s = "";
-  for (local i = 0; i < bytes.len(); i++) s += (bytes[i] & 0xff).tochar();
-  return s;
+local stringToBlob = function(s) {
+  local b = blob(s.len());
+  for (local i = 0; i < s.len(); i++) b[i] = s[i] & 0xff;
+  return b;
 };
 
 local bytesOfString = function(s) {
@@ -174,7 +194,9 @@ local encodeCodepoint = function(cp) {
 local stringFromCodepoints = function(cps) {
   local bytes = [];
   foreach (cp in cps) foreach (b in encodeCodepoint(cp)) bytes.append(b);
-  return stringFromBytes(bytes);
+  local s = "";
+  foreach (b in bytes) s += (b & 0xff).tochar();
+  return s;
 };
 
 local utf8Codepoints = function(s) {
@@ -213,289 +235,523 @@ local unitsFromString = function(s) {
   return out;
 };
 
-local stringFromUnits = function(units) {
-  local cps = [];
-  local i = 0;
-  while (i < units.len()) {
-    local u = units[i];
-    if (u >= 0xd800 && u <= 0xdbff) {
-      check(i + 1 < units.len(), "stringFromUnits: a high surrogate with no low half");
-      local low = units[i + 1];
-      check(low >= 0xdc00 && low <= 0xdfff, "stringFromUnits: a high surrogate with no low half");
-      cps.append(0x10000 + ((u - 0xd800) << 10) + (low - 0xdc00));
-      i += 2;
-    } else { cps.append(u); i++; }
-  }
-  return stringFromCodepoints(cps);
+local hex4 = function(v) {
+  local digs = "0123456789ABCDEF";
+  local out = "";
+  for (local i = 3; i >= 0; i--) out += digs[((v >>> (i * 4)) & 15)].tochar();
+  return out;
 };
 
-// --- the vector parser --------------------------------------------------------
+local renderUnits = function(s) {
+  local out = "";
+  local first = true;
+  foreach (u in unitsFromString(s)) {
+    if (!first) out += " ";
+    out += hex4(u);
+    first = false;
+  }
+  return out;
+};
+
+// the float32 bit conversion the vector vocabulary needs, taken from the
+// library's own serialize_float.nut exports (never a second narrowing)
+local floatMod = {};
+loadfile(::SERIALIZE_ROOT + "/src/serialize_float.nut", true).bindenv(::getroottable())(floatMod, null);
+local float32Bits = floatMod.float32Bits;
+local float32FromBits = floatMod.float32FromBits;
+
+// --- the vector parser (STANDARD.md, "The vector format") --------------------
+local newRecord = function() {
+  return {
+    operation = "", name = "", params = {}, paramNames = [], steps = [],
+    bytes = blob(0), expectKind = "", expect = "", consumed = 0,
+    hasConsumed = false, measureAtLeast = 0, hasMeasure = false, writer = false,
+  };
+};
+
 local parseRecords = function(text) {
   local recs = [];
   local rec = null;
   foreach (line in split(text, "\n")) {
-    line = strip(line);
-    if (line.len() == 0) {
-      if (rec != null && ("operation" in rec)) recs.append(rec);
+    if (line.len() > 0 && line[0] == '#') continue;
+    local s = strip(line);
+    if (s.len() == 0) {
+      if (rec != null && ("operation" in rec) && rec.operation != "") recs.append(rec);
       rec = null;
       continue;
     }
-    if (line[0] == '#') continue;
-    if (rec == null) rec = { params = {}, steps = {} };
-    local t = tokens(line);
-    if (t[0] == "operation") rec.operation <- t[1];
-    else if (t[0] == "name") rec.name <- t[1];
-    else if (t[0] == "param") {
-      if (t[1] == "step") rec.steps[rec.steps.len()] <- t.slice(2);
-      else rec.params[t[1]] <- parseNumber(t[3]);
-    } else if (t[0] == "bytes") {
-      local hexs = "";
-      for (local i = 1; i < t.len(); i++) { if (i > 1) hexs += " "; hexs += t[i]; }
-      rec.bytes <- hexs;
-    } else if (t[0] == "expect") {
-      if (t[1] == "refused") rec.expect <- "refused";
-      else if (t[1] == "bits") { rec.expect <- "bits"; rec.bitpattern <- parseNumber(t[3]); }
+    if (rec == null) rec = newRecord();
+    local sp = s.find(" ");
+    local key, rest;
+    if (sp == null) { key = s; rest = ""; }
+    else { key = s.slice(0, sp); rest = strip(s.slice(sp + 1)); }
+    if (key == "operation") rec.operation = rest;
+    else if (key == "name") rec.name = rest;
+    else if (key == "param") {
+      local eq = rest.find("=");
+      check(eq != null, "param needs `name = value`: " + s);
+      local pn = strip(rest.slice(0, eq));
+      local pv = strip(rest.slice(eq + 1));
+      if (pn == "step") rec.steps.append(pv);
+      else { rec.paramNames.append(pn); rec.params[pn] <- pv; }
+    }
+    else if (key == "bytes") rec.bytes = blobOfHexs(rest);
+    else if (key == "expect") {
+      if (rest == "refused") rec.expectKind = "refused";
       else {
-        rec.expect <- "value";
-        local vals = [];
-        for (local i = 3; i < t.len(); i++) vals.append(t[i]);
-        rec.values <- vals;
+        local eq = rest.find("=");
+        check(eq != null, "bad expect: " + s);
+        local k = strip(rest.slice(0, eq));
+        local v = strip(rest.slice(eq + 1));
+        check(k == "value" || k == "bits", "unknown expect kind " + k);
+        rec.expectKind = k;
+        rec.expect = v;
       }
-    } else if (t[0] == "consumed") rec.consumed <- t[1].tointeger();
-    else if (t[0] == "writer") rec.writer <- t[1];
-    else if (t[0] == "measure_at_least") rec.measure_at_least <- t[1].tointeger();
-    else throw "unknown record key: " + line;
+    }
+    else if (key == "consumed") { rec.consumed = rest.tointeger(); rec.hasConsumed = true; }
+    else if (key == "measure_at_least") { rec.measureAtLeast = rest.tointeger(); rec.hasMeasure = true; }
+    else if (key == "writer") {
+      check(rest == "canonical", "unknown writer mode " + rest);
+      rec.writer = true;
+    }
+    else throw "unknown record key: " + s;
   }
-  if (rec != null && ("operation" in rec)) recs.append(rec);
+  if (rec != null && ("operation" in rec) && rec.operation != "") recs.append(rec);
   return recs;
 };
 
-local countOps = function(text) {
-  local n = 0;
-  foreach (line in split(text, "\n")) {
-    local s = strip(line);
-    if (s.len() >= 9 && s.slice(0, 9) == "operation") n++;
-  }
-  return n;
+// --- the step machine (ported from serialize.go v1.15.1 conformance_test.go) --
+local numericKinds = {
+  bits = true, uint128 = true, float = true, double = true,
+  compressed_float = true, int = true, int64 = true, int128 = true,
+  int_relative = true, fixed = true,
 };
 
-// --- discover the corpus directory (never a fixed list): the pinned
-// interpreter has no directory-listing builtin, so list through system() into a
-// scratch file and read it. A file added to conformance/ is picked up with no
-// edit here.
+local newStep = function(kind) {
+  return {
+    kind = kind, width = 0, min = [0, 0], max = [0, 0],
+    integerBits = 0, fractionBits = 0, fmin = 0.0, fmax = 0.0, fres = 0.0,
+    previous = 0, pattern = [0, 0], boolean = false, data = null, text = "",
+  };
+};
+
+local stepFromWords = function(text) {
+  local w = tokens(text);
+  check(w.len() > 0, "empty step");
+  local number = function(i) {
+    check(i < w.len(), "step `" + text + "` is missing a number");
+    return parseNumber(w[i]);
+  };
+  local s;
+  if (w[0] == "bool" && w.len() == 1) s = newStep("bool");
+  else if (w[0] == "align" && w.len() == 1) s = newStep("align");
+  else if (w[0] == "float" && w.len() == 1) s = newStep("float");
+  else if (w[0] == "double" && w.len() == 1) s = newStep("double");
+  else if (w[0] == "uint128" && w.len() == 1) s = newStep("uint128");
+  else if (w[0] == "int_relative" && w.len() == 2) {
+    s = newStep("int_relative"); s.previous = signed32(number(1)[0]);
+  }
+  else if (w[0] == "compressed_float" && w.len() == 4) {
+    s = newStep("compressed_float");
+    s.fmin = w[1].tofloat(); s.fmax = w[2].tofloat(); s.fres = w[3].tofloat();
+  }
+  else if (w[0] == "bits" && w.len() == 2) { s = newStep("bits"); s.width = number(1)[0]; }
+  else if (w[0] == "object" && w.len() == 2) { s = newStep("object"); s.width = number(1)[0]; }
+  else if (w[0] == "bytes" && w.len() == 2) { s = newStep("bytes"); s.width = number(1)[0]; }
+  else if (w[0] == "string" && w.len() == 2) { s = newStep("string"); s.width = number(1)[0]; }
+  else if (w[0] == "wstring" && w.len() == 2) { s = newStep("wstring"); s.width = number(1)[0]; }
+  else if ((w[0] == "int" || w[0] == "int64" || w[0] == "int128") && w.len() == 3) {
+    s = newStep(w[0]); s.min = number(1); s.max = number(2);
+  }
+  else if (w[0] == "fixed" && w.len() == 5) {
+    s = newStep("fixed");
+    s.integerBits = number(1)[0]; s.fractionBits = number(2)[0];
+    s.min = number(3); s.max = number(4);
+  }
+  else throw "no runner for step `" + text + "`";
+  return s;
+};
+
+local operationTakesParam = function(operation, name) {
+  if (name == "preceding_bits") return operation == "align" || operation == "bytes";
+  if (name == "bits") return operation == "bits";
+  if (name == "count") return operation == "bytes";
+  if (name == "buffer_size") return operation == "string" || operation == "wstring";
+  if (name == "previous") return operation == "int_relative";
+  if (name == "res") return operation == "compressed_float";
+  if (name == "integer_bits" || name == "fraction_bits") return operation == "fixed";
+  if (name == "min" || name == "max") {
+    return operation == "int" || operation == "int64" || operation == "int128" ||
+      operation == "fixed" || operation == "compressed_float";
+  }
+  return false;
+};
+
+local buildSteps = function(rec) {
+  if (rec.operation == "sequence") {
+    check(rec.steps.len() > 0, rec.name + ": a sequence states no steps");
+    local out = [];
+    foreach (text in rec.steps) out.append(stepFromWords(text));
+    return out;
+  }
+  check(rec.steps.len() == 0, rec.name + ": steps are only meaningful on a sequence");
+
+  local number = function(name) {
+    check(name in rec.params, rec.name + ": no " + name + " parameter");
+    return parseNumber(rec.params[name]);
+  };
+  local floatParam = function(name) {
+    check(name in rec.params, rec.name + ": no " + name + " parameter");
+    return rec.params[name].tofloat();
+  };
+
+  local steps = [];
+  if ("preceding_bits" in rec.params) {
+    local w = parseNumber(rec.params["preceding_bits"])[0];
+    if (w > 0) { local b = newStep("bits"); b.width = w; steps.append(b); }
+  }
+
+  local s;
+  local op = rec.operation;
+  if (op == "bits") { s = newStep("bits"); s.width = number("bits")[0]; }
+  else if (op == "bool") s = newStep("bool");
+  else if (op == "uint128") s = newStep("uint128");
+  else if (op == "align") s = newStep("align");
+  else if (op == "float") s = newStep("float");
+  else if (op == "double") s = newStep("double");
+  else if (op == "int" || op == "int64" || op == "int128") {
+    s = newStep(op); s.min = number("min"); s.max = number("max");
+  }
+  else if (op == "int_relative") {
+    s = newStep("int_relative"); s.previous = signed32(number("previous")[0]);
+  }
+  else if (op == "compressed_float") {
+    s = newStep("compressed_float");
+    s.fmin = floatParam("min"); s.fmax = floatParam("max"); s.fres = floatParam("res");
+  }
+  else if (op == "bytes") { s = newStep("bytes"); s.width = number("count")[0]; }
+  else if (op == "string") { s = newStep("string"); s.width = number("buffer_size")[0]; }
+  else if (op == "wstring") { s = newStep("wstring"); s.width = number("buffer_size")[0]; }
+  else if (op == "fixed") {
+    s = newStep("fixed");
+    s.integerBits = number("integer_bits")[0]; s.fractionBits = number("fraction_bits")[0];
+    s.min = number("min"); s.max = number("max");
+  }
+  else throw rec.name + ": no runner for operation `" + op + "`";
+  steps.append(s);
+  return steps;
+};
+
+// --- running one step on any stream -----------------------------------------
+// The step carries its value both ways, so the writer and the measure leg
+// re-serialize exactly what the reader decoded.
+local runStep = function(stream, s, sabotage) {
+  local kind = s.kind;
+  if (kind == "bits") {
+    local h = { value = s.pattern[0] };
+    local ok = stream.serializeBits64(h, s.width);
+    if (ok) s.pattern = [h.value, 0];
+    return ok;
+  }
+  if (kind == "bool") {
+    local h = { value = s.boolean };
+    local ok = stream.serializeBool(h);
+    if (ok) s.boolean = h.value;
+    return ok;
+  }
+  if (kind == "uint128") {
+    local h = { value = [s.pattern[0], s.pattern[1]] };
+    local ok = stream.serializeUint128(h);
+    if (ok) s.pattern = [h.value[0], h.value[1]];
+    return ok;
+  }
+  if (kind == "align") {
+    if (sabotage == "align-padding" && stream.isReading()) {
+      local n = stream.alignBits();
+      if (n > 0) {
+        if (!stream._room(n)) return false;
+        stream._take(n);
+      }
+      return true;
+    }
+    return stream.serializeAlign();
+  }
+  if (kind == "int") {
+    local h = { value = signed32(s.pattern[0]) };
+    local ok = stream.serializeInt(h, signed32(s.min[0]), signed32(s.max[0]));
+    if (ok) s.pattern = int128From64(h.value);
+    return ok;
+  }
+  if (kind == "int64") {
+    local h = { value = s.pattern[0] };
+    local ok = stream.serializeInt64(h, s.min[0], s.max[0]);
+    if (ok) s.pattern = int128From64(h.value);
+    return ok;
+  }
+  if (kind == "int128") {
+    local h = { value = [s.pattern[0], s.pattern[1]] };
+    local ok = stream.serializeInt128(h, s.min, s.max);
+    if (ok) s.pattern = [h.value[0], h.value[1]];
+    return ok;
+  }
+  if (kind == "int_relative") {
+    local h = { value = signed32(s.pattern[0]) };
+    local ok = stream.serializeIntRelative(s.previous, h);
+    if (ok) s.pattern = int128From64(h.value);
+    return ok;
+  }
+  if (kind == "float") {
+    local h = { value = float32FromBits(s.pattern[0]) };
+    local ok = stream.serializeFloat(h);
+    if (ok) s.pattern = [float32Bits(h.value), 0];
+    return ok;
+  }
+  if (kind == "double") {
+    local h = { value = casti2f(s.pattern[0]) };
+    local ok = stream.serializeDouble(h);
+    if (ok) s.pattern = [castf2i(h.value), 0];
+    return ok;
+  }
+  if (kind == "compressed_float") {
+    local h = { value = float32FromBits(s.pattern[0]) };
+    local ok = stream.serializeCompressedFloat(h, s.fmin, s.fmax, s.fres);
+    if (ok) s.pattern = [float32Bits(h.value), 0];
+    return ok;
+  }
+  if (kind == "bytes") {
+    if (stream.isReading()) s.data = blob(s.width);
+    local ok = stream.serializeBytes(s.data);
+    return ok;
+  }
+  if (kind == "string") {
+    local h = { value = s.text };
+    local ok = stream.serializeString(h, s.width);
+    if (ok) s.text = h.value;
+    return ok;
+  }
+  if (kind == "wstring") {
+    local h = { value = s.text };
+    local ok = stream.serializeWideString(h, s.width);
+    if (ok) s.text = h.value;
+    return ok;
+  }
+  if (kind == "fixed") {
+    if (s.integerBits + s.fractionBits <= 64) {
+      local h = { value = s.pattern[0] };
+      local ok = stream.serializeFixed64(h, s.integerBits, s.fractionBits, s.min[0], s.max[0]);
+      if (ok) s.pattern = int128From64(h.value);
+      return ok;
+    }
+    local h = { value = [s.pattern[0], s.pattern[1]] };
+    local ok = stream.serializeFixed128(h, s.integerBits, s.fractionBits, s.min[0], s.max[0]);
+    if (ok) s.pattern = [h.value[0], h.value[1]];
+    return ok;
+  }
+  throw "no runner for step kind " + kind;
+};
+
+local stepSpan = function(steps, i) {
+  return steps[i].kind == "object" ? 1 + steps[i].width : 1;
+};
+
+local runSteps;
+local makeNested = function(steps, from, to, state) {
+  local o = {};
+  o.serialize <- function(stream) {
+    local stop = runSteps(stream, steps, from, to, state);
+    return stop == to;
+  };
+  return o;
+};
+
+runSteps = function(stream, steps, from, to, state) {
+  local i = from;
+  while (i < to) {
+    local span = stepSpan(steps, i);
+    if (steps[i].kind == "object") {
+      local obj = makeNested(steps, i + 1, i + 1 + steps[i].width, state);
+      if (!stream.serializeObject(obj)) { state.failed = steps[i]; return i; }
+      i += span;
+      continue;
+    }
+    if (!runStep(stream, steps[i], state.sabotage)) {
+      state.failed = steps[i];
+      return i;
+    }
+    i += span;
+  }
+  return to;
+};
+
+// --- expectations ------------------------------------------------------------
+local splitExpect = function(text) {
+  local parts = split(text, "|");
+  local out = [];
+  foreach (p in parts) out.append(strip(p));
+  return out;
+};
+
+local renderStepValue = function(s) {
+  if (s.kind in numericKinds) return "0x" + hex128(s.pattern);
+  if (s.kind == "bool") return s.boolean ? "true" : "false";
+  if (s.kind == "bytes") return blobToHex(s.data == null ? blob(0) : s.data);
+  if (s.kind == "string") return blobToHex(stringToBlob(s.text));
+  if (s.kind == "wstring") return renderUnits(s.text);
+  if (s.kind == "align") return "0";
+  return "-";
+};
+
+local expectationMatches = function(s, expected) {
+  if (s.kind in numericKinds) return same128(s.pattern, parseNumber(expected));
+  return renderStepValue(s) == expected;
+};
+
+// --- sentinels (a refused read leaves them in place) -------------------------
+local sentinelPattern = [0xCAFEF00D, 0];
+local sentinelNumber = int128From64(-1234567);
+
+local sentinelFor = function(kind) {
+  if (kind == "int" || kind == "int64" || kind == "int128" ||
+      kind == "int_relative" || kind == "fixed") return sentinelNumber;
+  return sentinelPattern;
+};
+
+local seedSentinels = function(steps) {
+  foreach (s in steps) {
+    s.pattern = [sentinelFor(s.kind)[0], sentinelFor(s.kind)[1]];
+    s.boolean = true;
+    s.data = null;
+    s.text = "";
+  }
+};
+
+// --- the reader, writer and measure legs ------------------------------------
+local checkDestination = function(rec, s) {
+  if (s.kind in numericKinds) {
+    check(same128(s.pattern, sentinelFor(s.kind)), rec.name + ": the refused read wrote to its destination");
+  } else if (s.kind == "bool") {
+    check(s.boolean == true, rec.name + ": the refused read wrote to its destination");
+  }
+};
+
+local checkTerminal = function(rec, stream) {
+  local before = stream.bitsProcessed();
+  local h = { value = 0xFFFFFFFF };
+  check(stream.serializeBits(h, 8) == false, rec.name + ": a read after the refusal succeeded; failure is not terminal");
+  check(h.value == 0xFFFFFFFF, rec.name + ": the read after the refusal wrote to its destination");
+  check(stream.bitsProcessed() == before, rec.name + ": the read after the refusal consumed bits");
+};
+
+local runReader = function(serialize, rec, steps, sabotage) {
+  seedSentinels(steps);
+  local stream = serialize.ReadStream(rec.bytes);
+  local state = { failed = null, sabotage = sabotage };
+  local stoppedAt = runSteps(stream, steps, 0, steps.len(), state);
+
+  if (rec.expectKind == "refused") {
+    check(stoppedAt < steps.len(), rec.name + ": the read succeeded, the corpus requires refusal");
+    if (state.failed != null) checkDestination(rec, state.failed);
+    // every later top-level step must refuse too, even where readable bits remain
+    local i = stoppedAt + stepSpan(steps, stoppedAt);
+    while (i < steps.len()) {
+      local span = stepSpan(steps, i);
+      local nextState = { failed = null, sabotage = sabotage };
+      local stop = runSteps(stream, steps, i, i + span, nextState);
+      check(stop < i + span, rec.name + ": step " + (i + 1) + " succeeded after step " + (stoppedAt + 1) + " was refused");
+      i += span;
+    }
+    checkTerminal(rec, stream);
+    return;
+  }
+
+  check(stoppedAt == steps.len(), rec.name + ": the read was refused, the corpus requires it accepted");
+
+  local entries = splitExpect(rec.expect);
+  local offset = steps.len() - entries.len();
+  check(offset >= 0, rec.name + ": the expect list states more values than the vector has steps");
+  for (local j = 0; j < entries.len(); j++) {
+    if (entries[j] == "-") continue;
+    local s = steps[offset + j];
+    check(expectationMatches(s, entries[j]),
+      rec.name + ": step " + (offset + j + 1) + " decoded " + renderStepValue(s) + ", the corpus states " + entries[j]);
+  }
+  if (rec.hasConsumed) {
+    check(stream.bitsProcessed() == rec.consumed,
+      rec.name + ": consumed " + stream.bitsProcessed() + " bits, the corpus states " + rec.consumed);
+  }
+};
+
+local runWriter = function(serialize, rec, steps) {
+  local cap = ((rec.bytes.len() + 64) / 8 * 8) + 8;
+  local stream = serialize.WriteStream(blob(cap));
+  local state = { failed = null, sabotage = null };
+  local stop = runSteps(stream, steps, 0, steps.len(), state);
+  check(stop == steps.len(), rec.name + ": the writer refused a canonical vector (step " + (stop + 1) + ")");
+  stream.flush();
+  local got = stream.data();
+  check(got.len() == rec.bytes.len(), rec.name + ": the writer emitted " + got.len() + " bytes, the corpus states " + rec.bytes.len());
+  for (local i = 0; i < rec.bytes.len(); i++) {
+    check((got[i] & 0xff) == (rec.bytes[i] & 0xff), rec.name + ": the writer emitted " + blobToHex(got) + ", the corpus states " + blobToHex(rec.bytes));
+  }
+};
+
+local runMeasure = function(serialize, rec, steps) {
+  local stream = serialize.MeasureStream();
+  local state = { failed = null, sabotage = null };
+  local stop = runSteps(stream, steps, 0, steps.len(), state);
+  check(stop == steps.len(), rec.name + ": the measure refused a step, a measure refuses nothing at runtime");
+  check(stream.bitsProcessed() >= rec.measureAtLeast,
+    rec.name + ": measured " + stream.bitsProcessed() + " bits, the corpus requires at least " + rec.measureAtLeast);
+};
+
+// --- one file, then the whole corpus ----------------------------------------
+local prepare = function(rec) {
+  check(rec.operation != "" && rec.name != "", "a record needs both an operation and a name");
+  foreach (pn in rec.paramNames) {
+    check(operationTakesParam(rec.operation, pn),
+      rec.name + ": no runner for parameter `" + pn + "` on operation `" + rec.operation + "`");
+  }
+  return buildSteps(rec);
+};
+
+local runRecords = function(serialize, recs, sabotage) {
+  foreach (rec in recs) {
+    local steps = prepare(rec);
+    if (sabotage != null) {
+      runReader(serialize, rec, steps, sabotage);
+      continue;
+    }
+    runReader(serialize, rec, steps, null);
+    if (rec.expectKind != "refused") {
+      if (rec.writer) runWriter(serialize, rec, steps);
+      if (rec.hasMeasure) runMeasure(serialize, rec, steps);
+    }
+  }
+};
+
+local runPath = function(serialize, path, label) {
+  local recs = parseRecords(readText(path));
+  runRecords(serialize, recs, null);
+  print(label + ": " + recs.len() + " records\n");
+  return recs.len();
+};
+
+// discover the corpus directory (never a fixed list): the pinned interpreter
+// has no directory-listing builtin, so list through system() into a scratch
+// file. A file added to conformance/ is picked up with no edit here.
 local discoverCorpusFiles = function(root) {
   local scratch = root + "/build/conformance-listing.txt";
-  local rc = system("ls -1 " + root + "/conformance > " + scratch);
+  local rc = system("ls -1 '" + root + "/conformance' > '" + scratch + "'");
   check(rc == 0, "could not list the corpus directory");
   local names = [];
   foreach (line in split(strip(readText(scratch)), "\n")) {
-    if (line.len() == 0) continue;
-    if (line.len() < 4 || line.slice(line.len() - 4) != ".txt") continue;
-    names.append(line);
+    local name = strip(line);
+    if (name.len() < 4 || name.slice(name.len() - 4) != ".txt") continue;
+    names.append(name);
   }
   names.sort();
   check(names.len() > 0, "empty corpus directory");
   return names;
-};
-
-// --- the single-operation runner ----------------------------------------------
-// openStream(op, stream, holder): call the read method for op, returning the
-// boolean result.
-local doRead = function(op, stream, h) {
-  if (op == "int") return stream.serializeInt(h, h.min, h.max);
-  if (op == "int64") return stream.serializeInt64(h, h.min, h.max);
-  if (op == "int128") return stream.serializeInt128(h, h.min, h.max);
-  if (op == "uint128") return stream.serializeUint128(h);
-  if (op == "int_relative") return stream.serializeIntRelative(h.prev, h);
-  if (op == "bool") return stream.serializeBool(h);
-  if (op == "float") return stream.serializeFloat(h);
-  if (op == "double") return stream.serializeDouble(h);
-  if (op == "bytes") return stream.serializeBytes(h.dest);
-  if (op == "string") return stream.serializeString(h, h.buffer_size);
-  if (op == "wstring") return stream.serializeWideString(h, h.buffer_size);
-  return null;
-};
-
-// The runner for a record of the operations this port implements. Returns
-// { handled = true } when it ran; the autonomy of the run is checked here.
-local runSingle = function(serialize, rec) {
-  local op = rec.operation;
-  if (op == "bits" || op == "bits64" || op == "uint8" || op == "uint16" ||
-      op == "uint32" || op == "uint64" || op == "align" || op == "fixed64" ||
-      op == "fixed128" || op == "compressed_float" || op == "compressed_float_precomputed" ||
-      op == "sequence" || op == "object") {
-    return { handled = false };
-  }
-
-  local is128 = (op == "int128" || op == "uint128");
-  local bytes = blobOfHexs(rec.bytes);
-  local rs = serialize.ReadStream(bytes);
-  local sentinel = is128 ? [0x1111222233334444, 0x5555666677778888] : 123456789;
-  local h = { value = sentinel };
-  if (op == "int" || op == "int64") { h.min <- rec.params.min[0]; h.max <- rec.params.max[0]; }
-  else if (op == "int128") { h.min <- rec.params.min; h.max <- rec.params.max; }
-  else if (op == "int_relative") h.prev <- rec.params.previous[0];
-  else if (op == "bytes") {
-    local count = ("count" in rec.params) ? rec.params.count[0] : 0;
-    h.dest <- blob(count);
-    for (local i = 0; i < count; i++) h.dest[i] = 0xa5;
-  }
-  else if (op == "string" || op == "wstring") h.buffer_size <- ("buffer_size" in rec.params) ? rec.params.buffer_size[0] : 0;
-
-  local prec = ("preceding_bits" in rec.params) ? rec.params.preceding_bits[0] : 0;
-  if (prec > 0) {
-    check(rs._room(prec), rec.name + ": preceding bits do not fit the data");
-    rs._take(prec);
-  }
-
-  local ok = doRead(op, rs, h);
-
-  if (rec.expect == "refused") {
-    check(ok == false, rec.name + ": refused read returned true");
-    check(rs.error() != null, rec.name + ": no error latched");
-    if (op != "bytes") {
-      check(rs.error() == serialize.SerializeError.ValueOutOfRange ||
-            rs.error() == serialize.SerializeError.Align ||
-            rs.error() == serialize.SerializeError.Overflow,
-        rec.name + ": latched a non-refusal " + rs.error());
-    }
-    // the stream is terminal: a further read of the same record fails, consumes
-    // no bits, and writes nothing
-    local before = rs.bitsProcessed();
-    local h2 = { value = sentinel };
-    if (op == "int" || op == "int64") { h2.min <- h.min; h2.max <- h.max; }
-    else if (op == "int128") { h2.min <- h.min; h2.max <- h.max; }
-    else if (op == "int_relative") h2.prev <- h.prev;
-    else if (op == "bytes") h2.dest <- h.dest;
-    else if (op == "string" || op == "wstring") h2.buffer_size <- h.buffer_size;
-    local ok2 = doRead(op, rs, h2);
-    check(ok2 == false, rec.name + ": the stream is not terminal");
-    check(rs.bitsProcessed() == before, rec.name + ": a terminal read consumed bits");
-    return { handled = true };
-  }
-
-  check(ok == true, rec.name + ": accepted read returned false (" + rs.error() + ")");
-  check(rs.error() == null, rec.name + ": accepted read latched " + rs.error());
-  check(rs.bitsProcessed() == rec.consumed, rec.name + ": consumed " + rs.bitsProcessed() + ", want " + rec.consumed);
-
-  // value equality
-  if (rec.expect == "bits") {
-    // compare by round-tripping the decoded value through the library's own
-    // writer (the reader widened the wire bits exactly, so writing the value
-    // back must reproduce the record's bit pattern, byte for byte)
-    local ws = serialize.WriteStream(blob(16));
-    local wr;
-    if (op == "float") wr = ws.serializeFloat({ value = h.value });
-    else wr = ws.serializeDouble({ value = h.value });
-    check(wr == true, rec.name + ": writer refused the decoded value");
-    ws.flush();
-    local got = ws.data();
-    local n = (op == "float") ? 4 : 8;
-    check(got.len() == n, rec.name + ": writer produced " + got.len() + " bytes");
-    for (local i = 0; i < n; i++) {
-      check((got[i] & 0xff) == ((rec.bitpattern[0] >> (8 * i)) & 0xff), rec.name + ": bit byte " + i);
-    }
-  } else {
-    if (op == "int" || op == "int64") {
-      local exp = rec.values[0];
-      check(h.value == parseNumber(exp)[0], rec.name + ": decoded " + h.value + ", want " + exp);
-    } else if (op == "int128" || op == "uint128") {
-      local e = parseNumber(rec.values[0]);
-      check(h.value[0] == e[0] && h.value[1] == e[1], rec.name + ": decoded 128 mismatch");
-    } else if (op == "int_relative") {
-      local exp = rec.values[0];
-      check(h.value == parseNumber(exp)[0], rec.name + ": decoded " + h.value + ", want " + exp);
-    } else if (op == "bytes") {
-      sameBytes(h.dest, blobOfValues(rec.values), rec.name + ": bytes");
-    } else if (op == "string") {
-      sameArray(bytesOfString(h.value), bytesOfString(stringFromBytes(blobOfValues(rec.values))), rec.name + ": string");
-    } else if (op == "wstring") {
-      local units = [];
-      foreach (t in rec.values) units.append(hexValue(t));
-      sameArray(unitsFromString(h.value), units, rec.name + ": wstring");
-    }
-  }
-  return { handled = true };
-};
-
-local blobToHex = function(b) {
-  local hex = "0123456789ABCDEF";
-  local o = "";
-  for (local i = 0; i < b.len(); i++) {
-    if (i > 0) o += " ";
-    o += hex[(b[i] >> 4) & 15].tochar();
-    o += hex[b[i] & 15].tochar();
-  }
-  return o;
-};
-
-// runWriter(serialize, rec): the writer-canonical leg of a record (STANDARD.md
-// "What a runner checks": for a vector carrying writer = canonical, the bytes a
-// writer emits for that value, byte for byte).
-local runWriter = function(serialize, rec) {
-  local op = rec.operation;
-  local ws = serialize.WriteStream(blob(64));
-  local prec = ("preceding_bits" in rec.params) ? rec.params.preceding_bits[0] : 0;
-  if (prec > 0) {
-    local bytes = blobOfHexs(rec.bytes);
-    local value = 0;
-    for (local i = 0; i < prec; i++) {
-      if (((bytes[i >> 3] >>> (i & 7)) & 1)) value = value | (1 << i);
-    }
-    check(ws._room(prec), rec.name + ": preceding bits do not fit the writer");
-    ws._put(value, prec);
-  }
-  local ok;
-  if (op == "int" || op == "int64") {
-    local v = parseNumber(rec.values[0])[0];
-    if (op == "int") ok = ws.serializeInt({ value = v }, rec.params.min[0], rec.params.max[0]);
-    else ok = ws.serializeInt64({ value = v }, rec.params.min[0], rec.params.max[0]);
-  } else if (op == "int128") {
-    local e = parseNumber(rec.values[0]);
-    ok = ws.serializeInt128({ value = e }, rec.params.min, rec.params.max);
-  } else if (op == "uint128") {
-    local e = parseNumber(rec.values[0]);
-    ok = ws.serializeUint128({ value = e });
-  } else if (op == "int_relative") {
-    local v = parseNumber(rec.values[0])[0];
-    ok = ws.serializeIntRelative(rec.params.previous[0], { value = v });
-  } else if (op == "bytes") {
-    ok = ws.serializeBytes(blobOfValues(rec.values));
-  } else if (op == "string") {
-    ok = ws.serializeString({ value = stringFromBytes(blobOfValues(rec.values)) }, ("buffer_size" in rec.params) ? rec.params.buffer_size[0] : 0);
-  } else if (op == "wstring") {
-    local units = [];
-    foreach (t in rec.values) units.append(hexValue(t));
-    ok = ws.serializeWideString({ value = stringFromUnits(units) }, ("buffer_size" in rec.params) ? rec.params.buffer_size[0] : 0);
-  } else if (op == "float") {
-    local rs = serialize.ReadStream(blobOfHexs(rec.bytes));
-    local h = { value = 0.0 };
-    check(rs.serializeFloat(h) == true && rs.bitsProcessed() == rec.consumed, rec.name + ": float canonical read failed");
-    ok = ws.serializeFloat({ value = h.value });
-  } else if (op == "double") {
-    local rs = serialize.ReadStream(blobOfHexs(rec.bytes));
-    local h = { value = 0.0 };
-    check(rs.serializeDouble(h) == true && rs.bitsProcessed() == rec.consumed, rec.name + ": double canonical read failed");
-    ok = ws.serializeDouble({ value = h.value });
-  } else {
-    return;
-  }
-  check(ok == true, rec.name + ": the writer refused its canonical value");
-  check(ws.error() == null, rec.name + ": the writer latched " + ws.error());
-  ws.flush();
-  check(blobToHex(ws.data()) == rec.bytes, rec.name + ": writer bytes " + blobToHex(ws.data()) + ", want " + rec.bytes);
-};
-
-local runFile = function(serialize, name) {
-  local text = readText(::SERIALIZE_ROOT + "/conformance/" + name);
-  local recs = parseRecords(text);
-  check(recs.len() == countOps(text), name + ": parsed " + recs.len() + " records, " + countOps(text) + " operations");
-  foreach (rec in recs) {
-    local r = runSingle(serialize, rec);
-    check(r.handled, rec.name + ": operation " + rec.operation + " has no runner");
-    if ("writer" in rec && rec.writer == "canonical") runWriter(serialize, rec);
-  }
-  print(name + ": " + recs.len() + " records\n");
 };
 
 function TestConformanceCorpus() {
@@ -504,23 +760,44 @@ function TestConformanceCorpus() {
 
   local files = discoverCorpusFiles(root);
   local total = 0;
-  foreach (f in files) {
-    runFile(serialize, f);
-    total += countOps(readText(root + "/conformance/" + f));
-  }
+  foreach (f in files) total += runPath(serialize, root + "/conformance/" + f, f);
   print("corpus: " + files.len() + " files, " + total + " records\n");
 
-  // The controls (STANDARD.md, "A gate nobody has seen go red is a claim, not
-  // a measurement"): a corpus file whose operation has no runner is REJECTED,
-  // never skipped. Feed a scratch copy with an unknown operation and require it
-  // is rejected.
-  local scratch = root + "/conformance/zz_control_unknown.txt";
+  // Control 1 (STANDARD.md, "A gate nobody has seen go red..."): a corpus file
+  // whose operation has no runner is REJECTED, never skipped.
+  local scratch = root + "/build/conformance-control-unknown.txt";
   local f = file(scratch, "wb");
   local body = "operation not_a_real_operation\nname control\nbytes 00\nexpect value = 0\nconsumed 1\n";
   foreach (c in body) f.writen(c, 'b');
   f.close();
   local rejected = false;
-  try { runFile(serialize, "zz_control_unknown.txt"); } catch (e) { rejected = true; }
-  system("rm -f " + scratch);
+  try { runPath(serialize, scratch, "control"); } catch (e) { rejected = true; }
+  system("rm -f '" + scratch + "'");
   check(rejected, "an unknown operation was not rejected");
+
+  // Control 2: a reader with the align-padding refusal switched off through the
+  // test-only hook, run over the real corpus. It must go red on exactly the
+  // vectors that pin that rule (the `align` records that expect a refusal) and
+  // on no others.
+  local expected = 0, seen = 0, wrong = 0;
+  foreach (name in files) {
+    local recs = parseRecords(readText(root + "/conformance/" + name));
+    foreach (rec in recs) {
+      local steps = prepare(rec);
+      local failed = false;
+      try { runReader(serialize, rec, steps, "align-padding"); } catch (e) { failed = true; }
+      local hasAlign = false;
+      foreach (s in steps) if (s.kind == "align") hasAlign = true;
+      local shouldFail = rec.expectKind == "refused" && hasAlign;
+      if (shouldFail) expected++;
+      if (failed) seen++;
+      if (failed != shouldFail) {
+        wrong++;
+        if (wrong <= 5) print("sabotage control: " + name + "/" + rec.name + " " + (failed ? "went red" : "stayed green") + "\n");
+      }
+    }
+  }
+  check(expected > 0, "the align-padding sabotage found no vector to break");
+  check(wrong == 0, "the align-padding sabotage did not go red on exactly the vectors that pin the rule");
+  print("sabotage control: " + seen + " records red, all " + expected + " align-padding refusals\n");
 }

@@ -5,16 +5,18 @@
 // bit is refused or decoded differently. A test passes by returning and fails
 // by throwing (DESIGN.md (i)).
 //
-// The golden message exercises every family of the wire. As written, the port
-// implements the bits, int, int_relative, float, bytes and string families; the
-// compressed_float and fixed families are the cards serialize-squirrel-compressed-float
-// and serialize-squirrel-fixed (serialize_compressed_float.nut and
-// serialize_fixed.nut), which have not landed on this branch, so this test
-// raises "not implemented" at the first such operation. The test is written
-// verbatim from the Go oracle so it runs as soon as those cards land.
+// The golden message exercises every family of the wire, so its reader and
+// writer legs cross the bits, int, int_relative, float, compressed_float,
+// bytes, string and fixed modules. The single-bit-flip leg is the control
+// STANDARD.md asks for: every consumed bit is meaningful, so flipping one
+// must be refused or change the decoded value.
 
+::GOLDEN_SOFT <- false;
 local check = function(cond, what) {
-  if (!cond) throw "TestGoldenWireFormat: " + what;
+  if (!cond) {
+    if (::GOLDEN_SOFT) throw "GOLDEN_REFUSED";
+    throw "TestGoldenWireFormat: " + what;
+  }
 };
 
 local MIN64 = 0x8000000000000000;
@@ -63,6 +65,7 @@ local goldenWireRead = function(serialize, stream) {
   check(stream.serializeAlign() == true, "align1");
   local bytes = blob(7);
   check(stream.serializeBytes(bytes) == true, "bytes");
+  d.bytes <- bytes;
   v = { value = "" }; check(stream.serializeString(v, 16) == true, "str"); d.str <- v.value;
   v = { value = "" }; check(stream.serializeWideString(v, 8) == true, "wstr"); d.wstr <- v.value;
   check(stream.serializeAlign() == true, "align2");
@@ -73,8 +76,50 @@ local goldenWireRead = function(serialize, stream) {
   check(stream.serializeAlign() == true, "align3");
   v = h(); check(stream.serializeFixed128(v, 112, 16, -144115188075855872, 144115188075855872) == true, "fixedQ112_16Wide"); d.fixedQ112_16Wide <- v.value;
   v = h(); check(stream.serializeFixed128(v, 64, 64, -9223372036854775808, 9223372036854775807) == true, "fixedQ64_64Wide"); d.fixedQ64_64Wide <- v.value;
-  check(stream.bitsProcessed() == 112 * 8, "golden message consumed " + stream.bitsProcessed() + " bits");
+  // STANDARD.md's message record: the message ends at bit 891, three bits into
+  // byte 111; the last five bits of the final byte are zero padding.
+  check(stream.bitsProcessed() == 891, "golden message consumed " + stream.bitsProcessed() + " bits");
   return d;
+};
+
+local sameBytes = function(a, b) {
+  if (a.len() != b.len()) return false;
+  for (local i = 0; i < a.len(); i++) if ((a[i] & 0xff) != (b[i] & 0xff)) return false;
+  return true;
+};
+
+local same128 = function(a, b) { return a[0] == b[0] && a[1] == b[1]; };
+local sameBits = function(a, b) { return castf2i(a) == castf2i(b); };
+
+// sameGolden compares decoded values by BIT PATTERN for the float families, as
+// STANDARD.md requires (NaN compares unequal to itself in value space).
+local sameGolden = function(a, b) {
+  if (a.bits4 != b.bits4) return false;
+  if (a.bits11 != b.bits11) return false;
+  if (a.bits24 != b.bits24) return false;
+  if (a.bits32 != b.bits32) return false;
+  if (a.intSmall != b.intSmall) return false;
+  if (a.intFull != b.intFull) return false;
+  if (a.flag != b.flag) return false;
+  if (!sameBits(a.floatValue, b.floatValue)) return false;
+  if (!sameBits(a.compressedFloatValue, b.compressedFloatValue)) return false;
+  if (!sameBits(a.doubleValue, b.doubleValue)) return false;
+  if (a.uint8Value != b.uint8Value) return false;
+  if (a.uint16Value != b.uint16Value) return false;
+  if (a.uint32Value != b.uint32Value) return false;
+  if (a.uint64Value != b.uint64Value) return false;
+  if (a.relativeNear != b.relativeNear) return false;
+  if (a.relativeFar != b.relativeFar) return false;
+  if (!sameBytes(a.bytes, b.bytes)) return false;
+  if (a.str != b.str) return false;
+  if (a.wstr != b.wstr) return false;
+  if (a.fixedQ8_8 != b.fixedQ8_8) return false;
+  if (a.fixedQ16_16 != b.fixedQ16_16) return false;
+  if (a.fixedQ48_16 != b.fixedQ48_16) return false;
+  if (a.fixedQ16_16Unsigned != b.fixedQ16_16Unsigned) return false;
+  if (!same128(a.fixedQ112_16Wide, b.fixedQ112_16Wide)) return false;
+  if (!same128(a.fixedQ64_64Wide, b.fixedQ64_64Wide)) return false;
+  return true;
 };
 
 function TestGoldenWireFormat() {
@@ -104,7 +149,9 @@ function TestGoldenWireFormat() {
   check(ws.serializeIntRelative(relativeBase, w(d.relativeNear)) == true, "write relativeNear");
   check(ws.serializeIntRelative(relativeBase, w(d.relativeFar)) == true, "write relativeFar");
   check(ws.serializeAlign() == true, "write align1");
-  check(ws.serializeBytes(goldenWireBytes.slice(56, 63)) == true, "write bytes");
+  local goldenBytesField = blob(7);
+  for (local i = 0; i < 7; i++) goldenBytesField[i] = goldenWireBytes[45 + i];
+  check(ws.serializeBytes(goldenBytesField) == true, "write bytes");
   check(ws.serializeString(w(d.str), 16) == true, "write str");
   check(ws.serializeWideString(w(d.wstr), 8) == true, "write wstr");
   check(ws.serializeAlign() == true, "write align2");
@@ -120,4 +167,31 @@ function TestGoldenWireFormat() {
   local got = ws.data();
   check(got.len() == 112, "re-write length " + got.len());
   for (local i = 0; i < 112; i++) check(got[i] == goldenWireBytes[i], "re-write byte " + i);
+
+  // every single-bit flip of a CONSUMED bit is refused or decodes differently
+  // (the last five bits of the final byte are padding and are not consumed, so
+  // they are outside this loop).
+  for (local bit = 0; bit < 891; bit++) {
+    local byteIndex = bit >> 3;
+    local mask = 1 << (bit & 7);
+    local original = goldenWireBytes[byteIndex] & 0xff;
+    goldenWireBytes[byteIndex] = original ^ mask;
+    local refused = false;
+    local differs = false;
+    local err = null;
+    ::GOLDEN_SOFT = true;
+    try {
+      local flipped = goldenWireRead(serialize, serialize.ReadStream(goldenWireBytes));
+      differs = !sameGolden(d, flipped);
+    } catch (e) {
+      err = e;
+    }
+    ::GOLDEN_SOFT = false;
+    goldenWireBytes[byteIndex] = original;
+    if (err != null) {
+      if (err == "GOLDEN_REFUSED") refused = true;
+      else throw err;
+    }
+    check(refused || differs, "bit " + bit + " flip was neither refused nor decoded differently");
+  }
 }
