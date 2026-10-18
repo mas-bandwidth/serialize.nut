@@ -19,82 +19,10 @@ local _M = vargv[0];
 local require = vargv[1];
 
 // fround (DESIGN.md (e)) narrows a double to the float32 Go's float32() gives.
-// DESIGN (h): compressed_float reaches serialize_float's fround. When that
-// dependency has not landed, the same narrow (bit-identical to the float
-// card's) is embedded so this family still runs; once serialize_float exists it
-// is used.
-local fround;
-try {
-  fround = require("serialize_float", "fround");
-} catch (e) {
-  local froundPattern = function(v) {
-    local bits = castf2i(v);
-    local sign = bits & 0x8000000000000000;
-    local exp = (bits >>> 52) & 0x7FF;
-    local frac = bits & 0xFFFFFFFFFFFFF;
-    local p;
-    if (exp == 0x7FF) {
-      if (frac == 0) p = sign >>> 32 | 0x7F800000;
-      else p = sign >>> 32 | 0x7F800000 | ((frac >>> 29) & 0x7FFFFF);
-    } else if (exp == 0) {
-      p = sign >>> 32;
-    } else {
-      local m53 = 0x10000000000000 | frac;
-      local fe = exp - 896;
-      if (fe > 254) {
-        p = sign >>> 32 | 0x7F800000;
-      } else if (fe >= 1) {
-        local dropped = m53 & 0x1FFFFFFF;
-        local m24 = m53 >>> 29;
-        local m = m24;
-        if (dropped > 0x10000000) m = m24 + 1;
-        else if (dropped == 0x10000000 && (m24 & 1) == 1) m = m24 + 1;
-        if (m == 0x1000000) { m = 0x800000; fe++; }
-        if (fe > 254) p = sign >>> 32 | 0x7F800000;
-        else p = sign >>> 32 | (fe << 23) | (m - 0x800000);
-      } else {
-        local t = exp - 926;
-        local num;
-        if (t < -52) {
-          if (exp == 873 && m53 > 0x10000000000000) num = 1; else num = 0;
-        } else {
-          local shift = 926 - exp;
-          local dropped = m53 & ((0x1 << shift) - 1);
-          local half = 0x1 << (shift - 1);
-          local m24 = m53 >>> shift;
-          local m = m24;
-          if (dropped > half) m = m24 + 1;
-          else if (dropped == half && (m24 & 1) == 1) m = m24 + 1;
-          if (m >= 0x800000) num = 0x800000; else num = m;
-        }
-        p = sign >>> 32 | num;
-      }
-    }
-    return p;
-  };
-  local float32FromBits = function(i) {
-    local sign = (i & 0x80000000) << 32;
-    local e = (i >>> 23) & 0xFF;
-    local m = i & 0x7FFFFF;
-    local db;
-    if (e == 0xFF) {
-      if (m == 0) db = sign | 0x7FF0000000000000;
-      else db = sign | 0x7FF0000000000000 | (m << 29);
-    } else if (e == 0) {
-      if (m == 0) db = sign;
-      else {
-        local k = 0;
-        local t = m;
-        while (t > 1) { t = t >>> 1; k++; }
-        db = sign | ((874 + k) << 52) | ((m << (52 - k)) & 0xFFFFFFFFFFFFF);
-      }
-    } else {
-      db = sign | ((e + 896) << 52) | (m << 29);
-    }
-    return casti2f(db);
-  };
-  fround = function(x) { return float32FromBits(froundPattern(x)); };
-}
+// DESIGN.md (h): compressed_float reaches serialize_float's fround through
+// require, one source of truth. require returns the module's exports table
+// (DESIGN.md (f)), so the named export is indexed from it.
+local fround = require("serialize_float").fround;
 
 // bitLen(n): the number of bits to represent the positive integer n
 // (serialize.go bits.Len32); bits_required(0, n) for n > 0 (STANDARD.md).
