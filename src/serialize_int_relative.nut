@@ -51,7 +51,9 @@ write.serializeIntRelative <- function(s, previous, h) {
   checkPrevious(previous);
   if (s.error() != null) return false;
   local current = h.value;
-  if (previous >= current) return s._fail(SerializeError.ValueOutOfRange);
+  // current is held in a 64-bit SQInteger, so the domain's top is checked too:
+  // a current past 2^31 - 1 would write 32 bits its own reader refuses
+  if (previous >= current || current > INT_MAX) return s._fail(SerializeError.ValueOutOfRange);
   local diff = current - previous;
   local total;
   local chosen = -1;
@@ -128,7 +130,9 @@ measure.serializeIntRelative <- function(s, previous, h) {
   checkPrevious(previous);
   if (s.error() != null) return false;
   local current = h.value;
-  if (previous >= current) return s._fail(SerializeError.ValueOutOfRange);
+  // current is held in a 64-bit SQInteger, so the domain's top is checked too:
+  // a current past 2^31 - 1 would write 32 bits its own reader refuses
+  if (previous >= current || current > INT_MAX) return s._fail(SerializeError.ValueOutOfRange);
   local diff = current - previous;
   local total = 1;
   if (diff != 1) {

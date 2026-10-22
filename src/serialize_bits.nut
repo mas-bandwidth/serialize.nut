@@ -218,20 +218,24 @@ read.serializeAlign <- function(s) {
 // MeasureStream.alignBits() returns (DESIGN.md (g)).
 measure.serializeBits <- function(s, h, bits) {
   if (bits < 1 || bits > 32) throw PANIC_BITS_RANGE;
+  if (!s._room(bits)) return false;
   s._put(0, bits);
   return true;
 }
 measure.serializeBits64 <- function(s, h, bits) {
   if (bits < 1 || bits > 64) throw PANIC_BITS_RANGE64;
+  if (!s._room(bits)) return false;
   s._put(0, bits);
   return true;
 }
-measure.serializeBool <- function(s, h) { s._put(0, 1); return true; }
-measure.serializeUint8 <- function(s, h) { s._put(0, 8); return true; }
-measure.serializeUint16 <- function(s, h) { s._put(0, 16); return true; }
-measure.serializeUint32 <- function(s, h) { s._put(0, 32); return true; }
-measure.serializeUint64 <- function(s, h) { s._put(0, 64); return true; }
-measure.serializeAlign <- function(s) { s._put(0, s.alignBits()); return true; }
+// a failed measure stream is terminal like any other: _room answers false
+// once a measure has latched (a non-finite float, a value out of range)
+measure.serializeBool <- function(s, h) { if (!s._room(1)) return false; s._put(0, 1); return true; }
+measure.serializeUint8 <- function(s, h) { if (!s._room(8)) return false; s._put(0, 8); return true; }
+measure.serializeUint16 <- function(s, h) { if (!s._room(16)) return false; s._put(0, 16); return true; }
+measure.serializeUint32 <- function(s, h) { if (!s._room(32)) return false; s._put(0, 32); return true; }
+measure.serializeUint64 <- function(s, h) { if (!s._room(64)) return false; s._put(0, 64); return true; }
+measure.serializeAlign <- function(s) { if (!s._room(7)) return false; s._put(0, s.alignBits()); return true; }
 
 _M.write <- write;
 _M.read <- read;

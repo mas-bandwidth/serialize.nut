@@ -72,9 +72,11 @@ local validateConstants = function(maxIntegerValue, bits, delta) {
 // checkTopDecode(delta, min): the declaration's top integer decodes to
 // min + delta, rounded once in float32, and a declaration whose top decode is
 // not finite is non-conforming as a whole (STANDARD.md compressed_float, "The
-// decode must be finite"), so a write or a measure raises serialize.go v2's
-// panic text on it, even for a value that would decode finite. Only the writer
-// checks: a reader refuses the non-finite decode itself.
+// decode must be finite"), so a write raises serialize.go v2's panic text on
+// it, even for a value that would decode finite. The measure raises too, a
+// deliberate deviation (serialize.go's measure does not check): it raises on
+// misuse like the writer (DESIGN.md (g)). A reader refuses the non-finite
+// decode itself.
 local checkTopDecode = function(delta, min) {
   if (isNotFinite(fround(fround(min) + delta))) {
     throw "serialize: compressed float declaration decodes its top integer to a value that is not finite";
@@ -151,6 +153,7 @@ local measure = {
     checkTopDecode(p.delta, min);
     local value = fround(h.value);
     if (isNotFinite(value)) throw "serialize: compressed float value is not finite";
+    if (!s._room(p.bits)) return false;
     s._put(0, p.bits);
     return true;
   },
@@ -159,6 +162,7 @@ local measure = {
     checkTopDecode(delta, min);
     local value = fround(h.value);
     if (isNotFinite(value)) throw "serialize: compressed float value is not finite";
+    if (!s._room(bits)) return false;
     s._put(0, bits);
     return true;
   },
