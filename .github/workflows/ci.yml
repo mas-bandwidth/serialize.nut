@@ -9,6 +9,9 @@
 # mas-bandwidth/serialize tag v1.17.0. The corpus job below holds them to that
 # release, never to main: an upstream merge mid-day must not change what a
 # commit's CI proves. Bump the tag family-wide, deliberately.
+#
+# The jobs run on this repository's own fleet runners (rowan-tools
+# fleet/runners.tsv, set serialize.nut), never GitHub's hosted machines.
 
 name: ci
 
@@ -16,10 +19,15 @@ on:
   push:
     branches: [main, sprint/serialize-squirrel]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    # THE FORK GUARD: this repository is PUBLIC and these are its own fleet
+    # runners, so a pull request from a fork never reaches them
+    # (tools/checkci/check-ci.sh holds every job to it).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, fleet, serialize]
     steps:
       - uses: actions/checkout@v4
 
@@ -61,16 +69,20 @@ jobs:
 
   corpus:
     name: STANDARD.md and conformance/ match the pinned release
-    runs-on: ubuntu-24.04
+    # THE FORK GUARD: this repository is PUBLIC and these are its own fleet
+    # runners, so a pull request from a fork never reaches them
+    # (tools/checkci/check-ci.sh holds every job to it).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, fleet, serialize]
     env:
       SERIALIZE_TAG: v1.17.0
     steps:
       - uses: actions/checkout@v4
 
       - name: Clone the reference at the pinned release
-        run: git clone --quiet --depth 1 --branch "$SERIALIZE_TAG" https://github.com/mas-bandwidth/serialize.git /tmp/serialize
+        run: git clone --quiet --depth 1 --branch "$SERIALIZE_TAG" https://github.com/mas-bandwidth/serialize.git "$RUNNER_TEMP/serialize"
 
       - name: The vendored standard and corpus are that release's, byte for byte
         run: |
-          diff -ru /tmp/serialize/conformance conformance
-          diff -ru /tmp/serialize/STANDARD.md STANDARD.md
+          diff -ru "$RUNNER_TEMP/serialize/conformance" conformance
+          diff -ru "$RUNNER_TEMP/serialize/STANDARD.md" STANDARD.md

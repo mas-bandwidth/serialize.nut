@@ -240,13 +240,15 @@ unsigned domain and fail otherwise — reject, never clamp.
 
 **A degenerate range where `min == max` is legal and costs zero bits, on the
 128-bit width exactly as on the narrower ones.** `bits_required128( min, max )`
-is zero, and the rule stated under `serialize_int` applies unchanged: `min <= max` in every build mode, nothing on the wire, and the value taken from `min`.
+is zero, and the rule stated under `serialize_int` applies unchanged: `min <=
+max` in every build mode, nothing on the wire, and the value taken from `min`.
 
 ### fixed (Q format, ranged)
 
     serialize_fixed( stream, value, integer_bits, fraction_bits, min, max )
 
-A fixed point value held in an integer storage type of exactly `integer_bits + fraction_bits` bits, with the sign bit counting toward `integer_bits` (Q48.16
+A fixed point value held in an integer storage type of exactly `integer_bits +
+fraction_bits` bits, with the sign bit counting toward `integer_bits` (Q48.16
 in an `int64_t`, Q112.16 in an `__int128`). The stored integer is the real
 value scaled by `2^fraction_bits`. `min` and `max` are bounds in **whole real
 units**, and all four parameters are compile-time constants of the call site —
@@ -828,7 +830,7 @@ bound answers exactly that question. Comparing a measure to a write's
 packet size. An application that needs the true bit count of a message from a
 known starting position has always had the escape hatch — write it to a
 scratch stream and read the count off the write. And the operation is probably
-vestigial — *"we won't support it with the rANS encoder for example"* —
+vestigial — *"we won't support it with the rANS encoder for example"* — 
 specified here because all nine implementations ship it and had already begun
 to disagree, not because it is expected to survive into entropy-coded
 encodings.
