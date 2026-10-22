@@ -30,7 +30,7 @@ local streams = require("serialize_stream");
 local int128 = require("serialize_int128");
 local SerializeError = streams.SerializeError;
 
-// serialize.go v1.15.1's panic texts, verbatim (DESIGN.md (g): API misuse
+// serialize.go v2.0.0's panic texts, verbatim (DESIGN.md (g): API misuse
 // raises naming the same rule)
 local PANIC_PARAMS = "serialize: fixed point requires integer bits >= 1, fraction bits >= 0, a Q format that fits the storage width, and min <= max";
 local PANIC_BOUNDS = "serialize: fixed point bounds in whole units do not fit the Q format";
@@ -125,7 +125,7 @@ local fixedPointCapacity = function(integerBits, signed) {
   return [0, (1 << integerBits) - 1];
 };
 
-// fixedPointParams64(integerBits, fractionBits, min, max): serialize.go v1.15.1's
+// fixedPointParams64(integerBits, fractionBits, min, max): serialize.go v2.0.0's
 // fixedPointParams64 (DESIGN.md (g); STANDARD.md, fixed). It raises
 // panicFixedParams when the Q format or the bounds are misuse, and
 // panicFixedBounds when a whole-unit bound does not fit the format. The raw
@@ -146,7 +146,7 @@ local fixedPointParams64 = function(integerBits, fractionBits, min, max) {
 };
 
 // fixedPointParams128(integerBits, fractionBits, min, max): serialize.go
-// v1.15.1's fixedPointParams128 (DESIGN.md (g); STANDARD.md, fixed). Storage is
+// v2.0.0's fixedPointParams128 (DESIGN.md (g); STANDARD.md, fixed). Storage is
 // exactly 128 bits, so integerBits + fractionBits must equal 128. The raw
 // offset math runs in the unsigned 128-bit domain; the width is the whole-unit
 // range's bit length plus fractionBits (shifting a range left adds exactly
@@ -255,7 +255,7 @@ write.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
 };
 
 // read.serializeFixed64: reject, never clamp: the decoded offset must be at
-// most raw_max - raw_min, and a read past the end fails with Overflow before
+// most raw_max - raw_min, and a read past the end fails with PastEnd before
 // it reads (STANDARD.md, fixed; Reader Obligations). A refusal leaves the
 // holder untouched and the stream terminal (DESIGN.md (g)).
 read.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
@@ -298,7 +298,7 @@ write.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
 };
 
 // read.serializeFixed128: the decoded offset must be at most the raw range,
-// rejected rather than clamped, and a read past the end is Overflow before it
+// rejected rather than clamped, and a read past the end is PastEnd before it
 // reads (STANDARD.md, fixed; Reader Obligations; DESIGN.md (g))
 read.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams128(integerBits, fractionBits, min, max);

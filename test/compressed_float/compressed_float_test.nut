@@ -16,6 +16,9 @@
 //       CompressedFloatParams derives raise; a non-finite value raises on
 //       write and measure (DESIGN.md (e)); and the reader refuses an integer
 //       above max_integer_value, which the refused vectors pin.
+//   (4) format 2.0's finite decode: the reader refuses a decode that rounds to
+//       an infinity as non_finite_float, and the writer and measure raise on a
+//       declaration whose top integer decodes to one.
 //
 // A test passes by returning and fails by throwing (DESIGN.md (i)).
 
@@ -38,6 +41,32 @@ local readText = function(path) {
   local s = "";
   foreach (c in b) s += c.tochar();
   return s;
+};
+
+// floatParam(tok): a float parameter. Squirrel's tofloat reads an all-digit
+// token as an integer first and saturates at 2^63, so a decimal integer is
+// accumulated in 32-bit limbs and widened limb by limb, exact for every
+// float32 (24 significant bits span at most two limbs).
+local floatParam = function(tok) {
+  local t = tok;
+  local neg = false;
+  if (t.len() > 0 && (t[0] == '-' || t[0] == '+')) { neg = t[0] == '-'; t = t.slice(1); }
+  local digits = t.len() > 0;
+  foreach (c in t) if (c < '0' || c > '9') digits = false;
+  if (!digits) return tok.tofloat();
+  local limbs = [0, 0, 0, 0, 0];
+  foreach (c in t) {
+    local carry = c - '0';
+    for (local i = 0; i < limbs.len(); i++) {
+      local v = limbs[i] * 10 + carry;
+      limbs[i] = v & 0xFFFFFFFF;
+      carry = v >>> 32;
+    }
+    if (carry != 0) throw "floatParam: " + tok + " is wider than 160 bits";
+  }
+  local f = 0.0;
+  for (local i = limbs.len() - 1; i >= 0; i--) f = f * 4294967296.0 + limbs[i].tofloat();
+  return neg ? -f : f;
 };
 
 // hexBytes(s): a blob of the space-separated hexadecimal byte pairs of s.
@@ -115,24 +144,25 @@ function TestSerializeCompressedFloat() {
   // (1) the corpus
   local corpusText = readText(root + "/conformance/compressed_float.txt");
   local records = parseRecords(corpusText);
-  local expectedCount = 29;
+  local expectedCount = 36;
   print("record count " + records.len() + "\n");
   check(records.len() == expectedCount,
     "the corpus has " + records.len() + " records, want " + expectedCount);
 
   local runRecord = function(rec) {
-    local min = rec.min.tofloat();
-    local max = rec.max.tofloat();
-    local res = rec.res.tofloat();
+    local min = floatParam(rec.min);
+    local max = floatParam(rec.max);
+    local res = floatParam(rec.res);
     local data = hexBytes(rec.bytes);
     local rs = serialize.ReadStream(data);
     local holder = { value = 0.5 };
 
     if ("expect" in rec) {
-      if (rec.expect == "refused") {
+      if (rec.expect.len() >= 8 && rec.expect.slice(0, 8) == "refused ") {
+        local reason = strip(rec.expect.slice(8));
         local ok = rs.serializeCompressedFloat(holder, min, max, res);
         check(ok == false, rec.name + ": a refused read succeeded");
-        check(rs.error() != serialize.SerializeError.None, rec.name + ": no error latched");
+        check(rs.error() == reason, rec.name + ": refused as " + rs.error() + ", the corpus states " + reason);
         check(holder.value == 0.5, rec.name + ": a refused read changed its holder");
         // terminal: a further read also fails and consumes nothing
         local bitsBefore = rs.bitsProcessed();
@@ -232,4 +262,60 @@ function TestSerializeCompressedFloat() {
     "a code above maxIntegerValue was accepted");
   check(rs.error() == serialize.SerializeError.ValueOutOfRange, "the refused code latched " + rs.error());
   check(out.value == -1.0, "the refused code changed its holder");
+
+  // the writer's (value - min) / delta is two float32 operations, each rounded:
+  // over [-1000, 0] at resolution 0.001, the float32 value 0xC396746D
+  // (-300.90958) is the integer 699091 (D3 AA 0A in 20 bits), where a writer
+  // that rounds only the quotient writes 699090. Found by the fuzz differential
+  // against serialize.go v2.0.0 (2026-10-22); the format 1.1 port wrote 699090.
+  {
+    local fw = serialize.WriteStream(blob(8));
+    local fv = { value = f32ToDouble(0xC396746D) };
+    check(fw.serializeCompressedFloat(fv, -1000.0, 0.0, 0.001), "the subtraction witness write failed");
+    fw.flush();
+    local fd = fw.data();
+    check(fw.bitsProcessed() == 20 && fd.len() == 3 && fd[0] == 0xD3 && fd[1] == 0xAA && fd[2] == 0x0A,
+      "the subtraction witness wrote " + fd.len() + " bytes " + (fd.len() == 3 ? format("%02X %02X %02X", fd[0], fd[1], fd[2]) : "") + ", want D3 AA 0A");
+  }
+
+  // (4) format 2.0, "The decode must be finite": over [3*2^103, FLT_MAX] at
+  // resolution 2^104 the top integer (2^24 - 2, 24 bits) decodes to +inf. The
+  // reader refuses it as non_finite_float with its holder untouched, through
+  // both entry points; the integer one below decodes finite and is accepted.
+  // Reversed witness: without the refusal the top read succeeds with +inf.
+  local cmin = floatParam("30423614405477505635920876929024");
+  local cmax = floatParam("340282346638528859811704183484516925440");
+  local cres = floatParam("20282409603651670423947251286016");
+  local cp = serialize.compressedFloatParams(cmin, cmax, cres);
+  check(cp.maxIntegerValue == 0xFFFFFE && cp.bits == 24, "the witness declaration derives " + cp.maxIntegerValue + " in " + cp.bits + " bits");
+  local top = blob(3);
+  top[0] = 0xFE; top[1] = 0xFF; top[2] = 0xFF;
+  local below = blob(3);
+  below[0] = 0xFD; below[1] = 0xFF; below[2] = 0xFF;
+  foreach (precomputed in [false, true]) {
+    local rt = serialize.ReadStream(top);
+    local ht = { value = 0.5 };
+    local okTop = precomputed
+      ? rt.serializeCompressedFloatPrecomputed(ht, cp.maxIntegerValue, cp.bits, cp.delta, cmin)
+      : rt.serializeCompressedFloat(ht, cmin, cmax, cres);
+    check(okTop == false, "the top integer's +inf decode was accepted (precomputed " + precomputed + ")");
+    check(rt.error() == serialize.SerializeError.NonFiniteFloat, "the +inf decode was refused as " + rt.error());
+    check(ht.value == 0.5, "the refused +inf decode changed its holder");
+    local rb = serialize.ReadStream(below);
+    local hb = { value = 0.5 };
+    local okBelow = precomputed
+      ? rb.serializeCompressedFloatPrecomputed(hb, cp.maxIntegerValue, cp.bits, cp.delta, cmin)
+      : rb.serializeCompressedFloat(hb, cmin, cmax, cres);
+    check(okBelow == true && hb.value - hb.value == 0, "the finite decode below the top was refused: " + rb.error());
+  }
+
+  // the writer raises on that declaration, whatever the value: its top decode is
+  // not finite, so the declaration is non-conforming as a whole (serialize.go
+  // v2's panicCompressedFloatDecode); the measure raises the same way
+  local decodePanic = "serialize: compressed float declaration decodes its top integer to a value that is not finite";
+  local hv = { value = cmin };
+  raises(function() { serialize.WriteStream(blob(8)).serializeCompressedFloat(hv, cmin, cmax, cres); }, decodePanic, "a non-finite top decode on write");
+  raises(function() { serialize.WriteStream(blob(8)).serializeCompressedFloatPrecomputed(hv, cp.maxIntegerValue, cp.bits, cp.delta, cmin); },
+    decodePanic, "a non-finite top decode on a precomputed write");
+  raises(function() { serialize.MeasureStream().serializeCompressedFloat(hv, cmin, cmax, cres); }, decodePanic, "a non-finite top decode on measure");
 }

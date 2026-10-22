@@ -1,10 +1,12 @@
 // TestDifferentialAgainstSerializeGo: serialize-squirrel-fuzz-differential.
 //
 // A fuzz differential of the Squirrel port against its reference,
-// github.com/mas-bandwidth/serialize.go v1.15.1 (DESIGN.md, Pins). From a FIXED
-// seed (math/rand/v2 PCG with constant seeds; no clock) it generates 2000
-// random programs, each a sequence of 1 to 24 operations drawn from every
-// operation serialize.go has, with values in range, and for each program:
+// github.com/mas-bandwidth/serialize.go/v2 v2.0.0 (DESIGN.md, Pins), format 2.0.
+// From a FIXED seed (math/rand/v2 PCG with constant seeds; no clock) it
+// generates 2000 random programs, each a sequence of 1 to 24 operations drawn
+// from every operation serialize.go has, with values in range (finite floats
+// only, well-formed UTF-8 with no zero byte), ended by an end as a packet reader
+// must (STANDARD.md end), and for each program:
 //
 //  1. serialize.go writes it, and the Squirrel port (fuzz/driver.nut under the
 //     pinned interpreter, DESIGN.md (i)) writes it; the bytes must be equal
@@ -15,13 +17,15 @@
 //     lossy), and both must consume the bits the writer wrote.
 //  3. For 1 in 4 programs the bytes are mutated (bit flips, truncation,
 //     extension) and both readers must agree on accept or refuse, on the index
-//     of the step that refused, on the error kind, and on every value decoded
+//     of the step that refused, on the refusal reason (STANDARD.md, Refusal
+//     reasons: past_end, non_finite_float, non_canonical, trailing_data and the
+//     rest), and on every value decoded
 //     before it (STANDARD.md, Reader Obligations; DESIGN.md (g), security
 //     trumps).
 //  4. For 1 in 8 programs whose bytes exceed one 8-byte word, both writers
 //     write into a buffer one word too short and must refuse at the same step
-//     with the same kind (DESIGN.md (g): a full buffer latches Overflow
-//     exactly where serialize.go's WriteStream returns ErrOverflow).
+//     with the same reason (DESIGN.md (g): a full buffer latches PastEnd
+//     exactly where serialize.go's WriteStream returns ErrPastEnd).
 //
 // The driver takes programs as text, one interpreter process per batch of 100
 // programs, the batch in a file in a t.TempDir() (the card's batching; the
@@ -51,10 +55,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"unicode/utf16"
 	"unicode/utf8"
 
-	serialize "github.com/mas-bandwidth/serialize.go"
+	serialize "github.com/mas-bandwidth/serialize.go/v2"
 )
 
 var sabotageWidenInt = flag.Bool("sabotage-widen-int", false,
@@ -74,7 +77,7 @@ const (
 
 type step struct {
 	kind  string
-	width int // bits / bits64 width; object span; string / wstring buffer size
+	width int // bits / bits64 width; object span; string buffer size
 	ib    int // fixed integer bits
 	fb    int // fixed fraction bits
 	min   serialize.Int128
@@ -85,7 +88,7 @@ type step struct {
 	fres  float32
 	u     serialize.Uint128 // numeric value bits (signed kinds sign extended)
 	b     bool
-	data  []byte // bytes, string (UTF-8), wstring (UTF-8)
+	data  []byte // bytes, string (UTF-8)
 }
 
 var minInt128 = serialize.Int128{Lo: 0, Hi: 1 << 63}
@@ -123,10 +126,12 @@ func (s *step) text() string {
 			hexU(serialize.Uint128{Lo: uint64(math.Float32bits(s.fres))}), hexU(s.u))
 	case "bytes":
 		return "bytes " + hexBytes(s.data)
-	case "string", "wstring":
+	case "string":
 		return fmt.Sprintf("%s %d %s", s.kind, s.width, hexBytes(s.data))
 	case "align":
 		return "align"
+	case "end":
+		return "end"
 	case "object":
 		return fmt.Sprintf("object %d", s.width)
 	}
@@ -150,9 +155,9 @@ func programValue(s *step) string {
 			return "1"
 		}
 		return "0"
-	case "bytes", "string", "wstring":
+	case "bytes", "string":
 		return hexBytes(s.data)
-	case "align", "object":
+	case "align", "end", "object":
 		return "-"
 	}
 	return hexU(s.u)
@@ -302,38 +307,49 @@ func fixedCapacity(integerBits int, signed bool) (int64, int64) {
 	return 0, int64(uint64(1)<<integerBits - 1)
 }
 
+// float32Bits draws a FINITE pattern (STANDARD.md, Finite values only: a writer
+// is handed finite values only), favouring the edges a reader must keep bit
+// exact; non-finite patterns reach the readers through the mutants.
 func (g *gen) float32Bits() uint32 {
 	sign := uint32(g.r.IntN(2)) << 31
 	switch g.r.IntN(8) {
-	case 0: // a NaN, signalling or quiet, with a payload
-		return sign | 0x7f800000 | (1 + g.r.Uint32N(0x7fffff))
-	case 1: // a signalling NaN with the smallest payload
-		return sign | 0x7f800001
+	case 0:
+		return sign | 0x7f7fffff // the largest finite
+	case 1:
+		return sign | 0x00800000 // the smallest normal
 	case 2:
-		return sign | 0x7f800000 // infinity
+		return sign | 0x007fffff // the largest subnormal
 	case 3:
-		return sign // zero
+		return sign // zero, either sign
 	case 4: // a subnormal
 		return sign | (1 + g.r.Uint32N(0x7fffff))
 	}
-	return g.r.Uint32()
+	for {
+		if b := g.r.Uint32(); b&0x7f800000 != 0x7f800000 {
+			return b
+		}
+	}
 }
 
 func (g *gen) float64Bits() uint64 {
 	sign := uint64(g.r.IntN(2)) << 63
 	switch g.r.IntN(8) {
 	case 0:
-		return sign | 0x7ff0000000000000 | (1 + g.r.Uint64N(0xfffffffffffff))
+		return sign | 0x7fefffffffffffff
 	case 1:
-		return sign | 0x7ff0000000000001
+		return sign | 0x0010000000000000
 	case 2:
-		return sign | 0x7ff0000000000000
+		return sign | 0x000fffffffffffff
 	case 3:
 		return sign
 	case 4:
 		return sign | (1 + g.r.Uint64N(0xfffffffffffff))
 	}
-	return g.r.Uint64()
+	for {
+		if b := g.r.Uint64(); b&0x7ff0000000000000 != 0x7ff0000000000000 {
+			return b
+		}
+	}
 }
 
 func (g *gen) runeOf() rune {
@@ -397,7 +413,7 @@ func (g *gen) compressed(s *step) {
 var leafKinds = []string{
 	"bits", "bits64", "bool", "uint8", "uint16", "uint32", "uint64", "uint128",
 	"int", "int64", "int128", "fixed64", "fixed128", "int_relative",
-	"float", "double", "cfloat", "cfloatpre", "bytes", "string", "wstring", "align",
+	"float", "double", "cfloat", "cfloatpre", "bytes", "string", "align",
 }
 
 func (g *gen) leaf(kind string) step {
@@ -479,21 +495,6 @@ func (g *gen) leaf(kind string) step {
 			if len(out)+utf8.RuneLen(r) > target {
 				break
 			}
-			out = utf8.AppendRune(out, r)
-		}
-		s.data = out
-	case "wstring":
-		s.width = 1 + g.r.IntN(32)
-		target := g.r.IntN(s.width) // fewer than bufferSize code units
-		var out []byte
-		units := 0
-		for {
-			r := g.runeOf()
-			n := utf16.RuneLen(r)
-			if units+n > target {
-				break
-			}
-			units += n
 			out = utf8.AppendRune(out, r)
 		}
 		s.data = out
@@ -715,17 +716,13 @@ func (r *runner) one(s serialize.Stream, i int) error {
 			return err
 		}
 		set(hexBytes([]byte(v)))
-	case "wstring":
-		v := ""
-		if s.IsWriting() {
-			v = string(st.data)
-		}
-		if err := s.SerializeWideString(&v, st.width); err != nil {
-			return err
-		}
-		set(hexBytes([]byte(v)))
 	case "align":
 		if err := s.SerializeAlign(); err != nil {
+			return err
+		}
+		set("-")
+	case "end":
+		if err := s.SerializeEnd(); err != nil {
 			return err
 		}
 		set("-")
@@ -735,16 +732,15 @@ func (r *runner) one(s serialize.Stream, i int) error {
 	return nil
 }
 
+// errKind is the refusal reason as STANDARD.md spells it (serialize.go v2's
+// Refusal.String), the spelling the driver prints from stream.error().
 func errKind(err error) string {
-	switch {
-	case err == nil:
+	if err == nil {
 		return "none"
-	case errors.Is(err, serialize.ErrOverflow):
-		return "overflow"
-	case errors.Is(err, serialize.ErrValueOutOfRange):
-		return "value_out_of_range"
-	case errors.Is(err, serialize.ErrAlign):
-		return "align"
+	}
+	var r serialize.Refusal
+	if errors.As(err, &r) && r.String() != "" {
+		return r.String()
 	}
 	return "other:" + err.Error()
 }
@@ -997,7 +993,8 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 	progs := make([]*program, programCount)
 	ops := 0
 	for n := range progs {
-		steps := g.program(1+g.r.IntN(maxOps), 0)
+		// a packet is one object and its end (STANDARD.md end)
+		steps := append(g.program(1+g.r.IntN(maxOps), 0), step{kind: "end"})
 		ops += len(steps)
 		p := &program{n: n, steps: steps, text: programText(steps)}
 		p.goW = goWrite(steps, writeCap, *sabotageWidenInt)
@@ -1010,7 +1007,9 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 			// under comparison are sabotaged
 			self = goRead(steps, goWrite(steps, writeCap, false).bytes)
 		}
-		if !self.ok || self.bits != p.goW.bits {
+		// an accepted end consumes the final byte's padding: a read of the
+		// whole packet consumes 8 * bytes bits (STANDARD.md end)
+		if !self.ok || self.bits != 8*int64(len(p.goW.bytes)) {
 			if !*sabotageWidenInt {
 				t.Fatalf("%s\n  serialize.go does not read back its own bytes %x (ok=%v step %d %s)", p.header(), p.goW.bytes, self.ok, self.idx, self.kind)
 			}
@@ -1046,7 +1045,7 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 		}
 	}
 	var counts []string
-	for _, k := range append(append([]string{}, leafKinds...), "object") {
+	for _, k := range append(append([]string{}, leafKinds...), "object", "end") {
 		if seen[k] == 0 {
 			t.Errorf("the generator drew no %s step in %d programs", k, programCount)
 		}
@@ -1105,8 +1104,8 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 				if d := compareValues(p, "squirrel reading go's bytes", sqR.vals, p.canon); d != "" {
 					add(d + both)
 				}
-				if sqR.bits != p.goW.bits {
-					add(fmt.Sprintf("%s%s\n  squirrel consumed %d bits of go's bytes, go wrote %d", p.header(), both, sqR.bits, p.goW.bits))
+				if sqR.bits != 8*int64(len(p.goW.bytes)) {
+					add(fmt.Sprintf("%s%s\n  squirrel consumed %d bits of go's %d bytes, the end consumes them all", p.header(), both, sqR.bits, len(p.goW.bytes)))
 				}
 			}
 			if sqW.ok {

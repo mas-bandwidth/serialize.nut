@@ -102,7 +102,7 @@ local parseByte = function(pair) {
 local newRecord = function(fname) {
   return {
     file = fname, operation = "", name = "", params = {}, steps = [],
-    bytes = blob(0), expectKind = "", expect = "",
+    bytes = blob(0), expectKind = "", expect = "", reason = null,
     consumed = 0, hasConsumed = false,
     measureAtLeast = 0, hasMeasure = false,
     writerCanonical = false,
@@ -142,7 +142,13 @@ local parseVectors = function(fname, text) {
       }
     }
     else if (key == "expect") {
-      if (rest == "refused") cur.expectKind = "refused";
+      local ew = fields(rest);
+      if (ew.len() > 0 && ew[0] == "refused") {
+        // format 2.0: `expect refused <reason>`, the closed list's spelling
+        if (ew.len() != 2) throw "TestSerializeBits: " + fname + ": `expect refused` must state one reason";
+        cur.expectKind = "refused";
+        cur.reason = ew[1];
+      }
       else {
         local eq = rest.find("=");
         if (eq == null) throw "TestSerializeBits: " + fname + ": expect needs `refused` or `value = ...`";
@@ -287,6 +293,7 @@ local runReader = function(r, steps) {
 
   if (r.expectKind == "refused") {
     if (stoppedAt >= steps.len()) throw r.name + ": the read succeeded, the corpus requires refusal";
+    if (stream.error() != r.reason) throw r.name + ": refused as " + stream.error() + ", the corpus states " + r.reason;
     local fs = steps[state.failed];
     if (fs.kind == "bits" || fs.kind == "uint128") {
       if (fs.pattern[0] != SENTINEL_LO || fs.pattern[1] != 0) throw r.name + ": the refused read wrote the destination";

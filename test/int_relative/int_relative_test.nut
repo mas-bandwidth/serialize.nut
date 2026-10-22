@@ -74,7 +74,11 @@ local parseRecords = function(text) {
     } else {
       if (cur == null) cur = {};
       if (k == "bytes") cur.bytes <- blobFromHex(v);
-      else if (k == "expect") cur.expect <- (v == "refused" ? null : trim(v.slice(v.find("=") + 1)).tointeger());
+      else if (k == "expect") {
+        // format 2.0: `expect refused <reason>`, or `expect value = <n>`
+        if (v.len() >= 8 && v.slice(0, 8) == "refused ") { cur.expect <- null; cur.reason <- trim(v.slice(8)); }
+        else cur.expect <- trim(v.slice(v.find("=") + 1)).tointeger();
+      }
       else if (k == "consumed") cur.consumed <- v.tointeger();
       else if (k == "writer") cur.writer <- (v == "canonical");
       else cur[k] <- v;
@@ -110,6 +114,7 @@ function TestSerializeIntRelative() {
     if (rec.expect == null) {
       // refused: the read fails, the destination is untouched, the stream is terminal
       check(ok == false, rec.name + ": a refused read succeeded");
+      check(rs.error() == rec.reason, rec.name + ": refused as " + rs.error() + ", the corpus states " + rec.reason);
       check(holder.value == -12345, rec.name + ": a refused read wrote the destination to " + holder.value);
       local h2 = { value = 999 };
       local ok2 = rs.serializeIntRelative(previous, h2);
@@ -187,6 +192,41 @@ function TestSerializeIntRelative() {
       check(rs.serializeIntRelative(2147483647, h) == false, "difference " + diff + " past the domain top was accepted");
       check(h.value == -1, "difference " + diff + " past the domain top wrote " + h.value);
     }
+  }
+
+  // THE CANONICAL TIER (format 2.0, STANDARD.md int_relative): the absolute
+  // tier carrying a current no more than 69914 above previous is a second
+  // encoding of a value a bounded tier carries, refused as non_canonical; one
+  // more is the first difference the absolute tier owns. The domain and order
+  // come first (value_out_of_range), and the difference is formed in 64 bits,
+  // so a current past the domain is out of range whatever its difference.
+  // Reversed witness: the format 1.1 reader accepted every absolute current
+  // above previous.
+  {
+    local absolute = function(previous, current) {
+      local bw = serialize.BitWriter(blob(8));
+      bw.writeBits(0, 6);
+      bw.writeBits(current, 32);
+      bw.flushBits();
+      local rs = serialize.ReadStream(bw.data());
+      local h = { value = -1 };
+      local ok = rs.serializeIntRelative(previous, h);
+      return { ok = ok, error = rs.error(), value = h.value };
+    };
+    foreach (diff in [1, 2, 6, 7, 69913, 69914]) {
+      local r = absolute(1000, 1000 + diff);
+      check(!r.ok && r.error == serialize.SerializeError.NonCanonical && r.value == -1,
+        "an absolute difference of " + diff + " was " + (r.ok ? "accepted" : "refused as " + r.error));
+    }
+    local first = absolute(1000, 1000 + 69915);
+    check(first.ok && first.value == 1000 + 69915, "the first absolute difference, 69915, was refused as " + first.error);
+    local top = absolute(2147483647 - 69915, 2147483647);
+    check(top.ok && top.value == 2147483647, "the domain maximum from the last tier boundary was refused as " + top.error);
+    local past = absolute(2147483647 - 5, 0x80000001);
+    check(!past.ok && past.error == serialize.SerializeError.ValueOutOfRange,
+      "a current past the domain with a small difference was " + (past.ok ? "accepted" : "refused as " + past.error));
+    local below = absolute(1000, 999);
+    check(!below.ok && below.error == serialize.SerializeError.ValueOutOfRange, "a current below previous was refused as " + below.error);
   }
 
   // a previous outside the int_relative domain is API misuse on every stream

@@ -23,6 +23,7 @@ local require = vargv[1];
 // require, one source of truth. require returns the module's exports table
 // (DESIGN.md (f)), so the named export is indexed from it.
 local fround = require("serialize_float").fround;
+local SerializeError = require("serialize_stream").SerializeError;
 
 // bitLen(n): the number of bits to represent the positive integer n
 // (serialize.go bits.Len32); bits_required(0, n) for n > 0 (STANDARD.md).
@@ -44,6 +45,10 @@ local isNotFinite = function(x) {
 // float32 step rounds (DESIGN.md (e)). min >= max or resolution <= 0 is API
 // misuse and raises serialize.go's panic text.
 local compressedFloatParams = function(min, max, resolution) {
+  // the parameters are float32, as Go's are: rounded on entry (DESIGN.md (e))
+  min = fround(min);
+  max = fround(max);
+  resolution = fround(resolution);
   if (!(min < max) || !(resolution > 0)) {
     throw "serialize: compressed float requires min < max and resolution > 0";
   }
@@ -64,14 +69,30 @@ local validateConstants = function(maxIntegerValue, bits, delta) {
   }
 };
 
+// checkTopDecode(delta, min): the declaration's top integer decodes to
+// min + delta, rounded once in float32, and a declaration whose top decode is
+// not finite is non-conforming as a whole (STANDARD.md compressed_float, "The
+// decode must be finite"), so a write or a measure raises serialize.go v2's
+// panic text on it, even for a value that would decode finite. Only the writer
+// checks: a reader refuses the non-finite decode itself.
+local checkTopDecode = function(delta, min) {
+  if (isNotFinite(fround(fround(min) + delta))) {
+    throw "serialize: compressed float declaration decodes its top integer to a value that is not finite";
+  }
+};
+
 // the write arm's audited home (serialize.go compressedFloat32Precomputed)
 local writePrecomputed = function(s, h, maxIntegerValue, bits, delta, min) {
   validateConstants(maxIntegerValue, bits, delta);
+  min = fround(min);
+  checkTopDecode(delta, min);
   local value = fround(h.value);
   if (isNotFinite(value)) {
     throw "serialize: compressed float value is not finite";
   }
-  local normalizedValue = fround((value - min) / delta);
+  // (value - min) / delta: two float32 operations, each rounded; the
+  // difference rounds before the quotient (serialize.go's float32 arithmetic)
+  local normalizedValue = fround(fround(value - min) / delta);
   if (!(normalizedValue >= 0)) normalizedValue = 0;
   else if (!(normalizedValue <= 1)) normalizedValue = 1;
   local mf = fround(maxIntegerValue);
@@ -87,13 +108,19 @@ local writePrecomputed = function(s, h, maxIntegerValue, bits, delta, min) {
 // the read arm's audited home (serialize.go compressedFloat32Precomputed)
 local readPrecomputed = function(s, h, maxIntegerValue, bits, delta, min) {
   validateConstants(maxIntegerValue, bits, delta);
+  min = fround(min);
   if (!s._room(bits)) return false;
   local integerValue = s._take(bits);
-  if (integerValue > maxIntegerValue) return s._fail("value_out_of_range");
+  if (integerValue > maxIntegerValue) return s._fail(SerializeError.ValueOutOfRange);
   local mf = fround(maxIntegerValue);
   local normalizedValue = fround(fround(integerValue) / mf);
   local product = fround(normalizedValue * delta);
   local result = fround(product + min);
+  // STANDARD.md compressed_float, "The decode must be finite": every operand
+  // is finite and the integer in range, and still the final add can round
+  // past FLT_MAX ([3*2^103, FLT_MAX] at 2^104 decodes its top integer to +inf).
+  // Refused as non_finite_float, the holder untouched, whatever the declaration.
+  if (isNotFinite(result)) return s._fail(SerializeError.NonFiniteFloat);
   h.value <- result;
   return true;
 };
@@ -121,6 +148,7 @@ local read = {
 local measure = {
   serializeCompressedFloat = function(s, h, min, max, resolution) {
     local p = compressedFloatParams(min, max, resolution);
+    checkTopDecode(p.delta, min);
     local value = fround(h.value);
     if (isNotFinite(value)) throw "serialize: compressed float value is not finite";
     s._put(0, p.bits);
@@ -128,6 +156,7 @@ local measure = {
   },
   serializeCompressedFloatPrecomputed = function(s, h, maxIntegerValue, bits, delta, min) {
     validateConstants(maxIntegerValue, bits, delta);
+    checkTopDecode(delta, min);
     local value = fround(h.value);
     if (isNotFinite(value)) throw "serialize: compressed float value is not finite";
     s._put(0, bits);

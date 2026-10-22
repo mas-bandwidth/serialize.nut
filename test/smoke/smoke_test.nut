@@ -102,20 +102,41 @@ function TestSmoke() {
   raises(function() { ws._arm("../smoke", "serializeSmokeTestOnly"); },
     "serialize: the loader refuses serialize_../smoke", "a traversal name");
 
+  // THE REFUSAL REASONS (STANDARD.md, Refusal reasons): exactly the closed
+  // list of eight, each spelled as the standard spells it, and None
+  local reasons = {
+    PastEnd = "past_end", ValueOutOfRange = "value_out_of_range",
+    NonzeroPadding = "nonzero_padding", TrailingData = "trailing_data",
+    NonFiniteFloat = "non_finite_float", InvalidUtf8 = "invalid_utf8",
+    EmbeddedNul = "embedded_nul", NonCanonical = "non_canonical",
+  };
+  local kinds = 0;
+  foreach (k, v in serialize.SerializeError) {
+    kinds++;
+    if (k == "None") { check(v == null, "SerializeError.None is " + v); continue; }
+    check(k in reasons && reasons[k] == v, "SerializeError." + k + " = " + v + " is not on the closed list");
+  }
+  check(kinds == 9, "SerializeError has " + kinds + " kinds, want the eight reasons and None");
+
   // THE LATCH (DESIGN.md (g)): on a ReadStream over empty data a read of one
-  // bit fails and latches Overflow (STANDARD.md Reader Obligations); a later
+  // bit fails and latches PastEnd (STANDARD.md Reader Obligations); a later
   // call fails, consumes nothing and leaves its holder unchanged; the first
   // error sticks
   check(rs.ok() && rs.error() == serialize.SerializeError.None, "a fresh ReadStream is not healthy");
   check(rs._room(1) == false, "a one-bit read of empty data did not fail");
-  check(rs.error() == serialize.SerializeError.Overflow, "the empty read latched " + rs.error());
+  check(rs.error() == serialize.SerializeError.PastEnd, "the empty read latched " + rs.error());
+  // zero-bit operations consult the latch too: an align on an aligned stream
+  // and an end refuse on a failed stream, keeping the first reason (STANDARD.md,
+  // Failure is terminal). Reversed witness: the format 1.1 align returned true.
+  check(rs.alignBits() == 0 && rs.serializeAlign() == false, "an aligned align succeeded on a failed stream");
+  check(rs.serializeEnd() == false && rs.error() == serialize.SerializeError.PastEnd, "an end on a failed stream answered " + rs.error());
   local holder = { value = 7 };
   local later = { serialize = function(stream) { holder.value = 9; return true; } };
   check(rs.serializeObject(later) == false, "a call after the latch succeeded");
   check(holder.value == 7, "a call after the latch changed its holder to " + holder.value);
   check(rs.bitsProcessed() == 0, "a call after the latch consumed bits");
   local refusing = { serialize = function(stream) { return false; } };
-  check(rs.serializeObject(refusing) == false && rs.error() == serialize.SerializeError.Overflow,
+  check(rs.serializeObject(refusing) == false && rs.error() == serialize.SerializeError.PastEnd,
     "the first error did not stick");
   // an object that refuses its own value latches ValueOutOfRange (DESIGN.md (a))
   local rs2 = serialize.ReadStream(blob(0));
@@ -127,8 +148,10 @@ function TestSmoke() {
   check(rs2.ok(), "reset did not clear the latch");
 
   // the write capacity and the measure bound (DESIGN.md (g)): a write past the
-  // buffer latches Overflow; a measure refuses nothing and charges 7 per align
-  check(ws._room(128) && !ws._room(129) && ws.error() == serialize.SerializeError.Overflow, "the write capacity");
+  // buffer latches PastEnd; a measure refuses nothing and charges 7 per align
+  check(ws._room(128) && !ws._room(129) && ws.error() == serialize.SerializeError.PastEnd, "the write capacity");
+  local wa = serialize.WriteStream(blob(8));
+  check(!wa._room(65) && wa.serializeAlign() == false, "an aligned align succeeded on a failed writer");
   check(ms._room(1 << 40) && ms.alignBits() == 7, "the measure bound");
   raises(function() { serialize.WriteStream(blob(12)); }, "serialize: bit writer buffer size must be a multiple of 8 bytes", "a 12-byte buffer");
 }

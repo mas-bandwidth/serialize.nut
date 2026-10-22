@@ -24,7 +24,9 @@
 //                                             the refusing step, error(), and on
 //                                             a read the values decoded before it
 //
-// A refused read whose destination was written answers kind `touched:<kind>`,
+// <kind> is the stream's first refusal reason, spelled as STANDARD.md spells it
+// (format 2.0, Refusal reasons). A refused read whose destination was written
+// answers kind `touched:<kind>`,
 // so the differential goes red on it (DESIGN.md (g): a refusal leaves the
 // caller's destination untouched).
 //
@@ -38,7 +40,7 @@
 //   fixed64 <ib> <fb> MIN MAX N  fixed128 <ib> <fb> MIN MAX N
 //   int_relative PREV N  float N  double N  cfloat MIN MAX RES N
 //   cfloatpre MIN MAX RES N  bytes xHEX  string <buffer> xHEX
-//   wstring <buffer> xHEX  align  object <span>
+//   align  end  object <span>
 //
 // `object <span>` serializes the next <span> steps inside serializeObject
 // (STANDARD.md object). A value token is ignored on a read.
@@ -50,8 +52,13 @@ local serialize = dofile(root + "/src/serialize.nut", true);
 // the float32 bit conversions, taken from the library's own
 // serialize_float.nut exports (DESIGN.md (e): bit patterns, never conversions),
 // exactly as test/conformance does: never a second narrowing
-local floatMod = {};
-loadfile(root + "/src/serialize_float.nut", true).bindenv(::getroottable())(floatMod, null);
+local srcRequire;
+srcRequire = function(name, who = null) {
+  local m = {};
+  loadfile(root + "/src/" + name + ".nut", true).bindenv(::getroottable())(m, srcRequire);
+  return m;
+};
+local floatMod = srcRequire("serialize_float");
 local float32Bits = floatMod.float32Bits;
 local float32FromBits = floatMod.float32FromBits;
 
@@ -200,8 +207,8 @@ local parseSteps = function() {
       s.fres = float32FromBits(num()[0]); s.v = num();
     }
     else if (k == "bytes") s.data = xblob();
-    else if (k == "string" || k == "wstring") { s.width = dec(); s.data = xblob(); }
-    else if (k == "align") {}
+    else if (k == "string") { s.width = dec(); s.data = xblob(); }
+    else if (k == "align" || k == "end") {}
     else if (k == "object") s.width = dec();
     else throw "driver: no step kind " + k;
     steps.append(s);
@@ -285,14 +292,17 @@ local runOne = function(stream, s, i, st) {
       for (local j = 0; j < data.len(); j++) if ((data[j] & 0xff) != 0xa5) return false;
       return true;
     };
-  } else if (k == "string" || k == "wstring") {
+  } else if (k == "string") {
     h = { value = w ? blobToString(s.data) : SENTINEL_S };
-    if (k == "string") ok = stream.serializeString(h, s.width);
-    else ok = stream.serializeWideString(h, s.width);
+    ok = stream.serializeString(h, s.width);
     if (ok) out = xOfString(h.value);
     untouched = function() { return h.value == SENTINEL_S; };
   } else if (k == "align") {
     ok = stream.serializeAlign();
+    out = "-";
+    untouched = function() { return true; };
+  } else if (k == "end") {
+    ok = stream.serializeEnd();
     out = "-";
     untouched = function() { return true; };
   } else throw "driver: no runner for " + k;

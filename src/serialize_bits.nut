@@ -4,7 +4,7 @@
 // exports table and vargv[1] the loader's require.
 //
 // The wire is STANDARD.md, Bit-Level Primitives (bits, bool, uint128's halves,
-// align), and the bytes are exactly serialize.go v1.15.1's write_stream.go /
+// align), and the bytes are exactly serialize.go v2.0.0's write_stream.go /
 // read_stream.go / measure_stream.go for the same operations (DESIGN.md (g)).
 //
 // THE NUMBER MODEL (DESIGN.md (c)): one 64-bit SQInteger (sq64). A uint64
@@ -64,7 +64,7 @@ _M.bitsRequired128 <- function(min, max) {
   if (min[0] == max[0] && min[1] == max[1]) return 0;
   return u128len(u128sub(max, min));
 };
-// signedToUnsigned / unsignedToSigned: serialize.go v1.15.1's int32 / uint32
+// signedToUnsigned / unsignedToSigned: serialize.go v2.0.0's int32 / uint32
 // zig-zag (serialize.go's serialize.go: SignedToUnsigned uses uint32(n) << 1
 // ^ (0 - uint32(n) >> 31), UnsignedToSigned uses (n >> 1) ^ (0 - (n & 1)).
 // The operand is masked to the low 32 bits first so a negative int32's upper
@@ -149,10 +149,12 @@ write.serializeUint64 <- function(s, h) {
 }
 
 // serializeAlign: pads with zero bits to the next byte boundary; nothing is
-// written when already aligned (STANDARD.md, align).
+// written when already aligned (STANDARD.md, align). The aligned arm still
+// consults the failure state: a failed stream refuses a zero-bit align too
+// (STANDARD.md, Reader Obligations, "Failure is terminal").
 write.serializeAlign <- function(s) {
   local n = s.alignBits();
-  if (n == 0) return true;
+  if (n == 0) return s.ok();
   if (!s._room(n)) return false;
   s._put(0, n);
   return true;
@@ -205,9 +207,9 @@ read.serializeUint64 <- function(s, h) {
 
 read.serializeAlign <- function(s) {
   local n = s.alignBits();
-  if (n == 0) return true;
+  if (n == 0) return s.ok();
   if (!s._room(n)) return false;
-  if (s._take(n) != 0) return s._fail(Err.Align);
+  if (s._take(n) != 0) return s._fail(Err.NonzeroPadding);
   return true;
 }
 

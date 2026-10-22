@@ -1,17 +1,19 @@
-// TestSerializeStrings: the bytes, string and wstring card of
-// serialize-squirrel (DESIGN.md (h), file layout: src/serialize_bytes.nut).
-// It pins, in this order:
+// TestSerializeStrings: the bytes and string card of serialize-squirrel
+// (DESIGN.md (h), file layout: src/serialize_bytes.nut), format 2.0. It pins,
+// in this order:
 //
-//   (1) every record of conformance/bytes.txt, string.txt and wstring.txt,
-//       read and written as a runner must, with the record count per file
-//       printed and required to equal the file's (STANDARD.md, Bytes and
-//       Strings; Reader Obligations; The Measure Stream);
-//   (2) serialize.go v1.15.1's TestSerializeWideStringFamilyPin bytes
-//       ("\U0001F600A" against buffer size 8);
-//   (3) serialize.go v1.15.1's TestWideStringLengthValidatedBeforeNarrowing
-//       rule, at the Squirrel boundary: the UTF-16 length is compared with
-//       bufferSize before any narrower length is written;
-//   (4) the measure stream's conservative bound for bytes, string and wstring.
+//   (1) every record of conformance/bytes.txt and string.txt, read and
+//       written as a runner must, each refusal for its stated reason, with the
+//       record count per file printed and required to equal the file's
+//       (STANDARD.md, Bytes and Strings; Reader Obligations; The Measure
+//       Stream);
+//   (2) the string length rule at the buffer boundary, and the buffer size
+//       domain [1, 2^31);
+//   (3) the strict writer: a string with a zero byte or that is not
+//       well-formed UTF-8 raises on write and measure, in every stream state;
+//   (4) the length is checked against the remaining bytes BEFORE the payload
+//       is allocated, so a short stream claiming a huge length is past_end;
+//   (5) the measure stream's conservative bound for bytes and string.
 //
 // A test passes by returning and fails by throwing (DESIGN.md (i)).
 
@@ -108,97 +110,6 @@ local bytesOfString = function(s) {
   return out;
 };
 
-local encodeCodepoint = function(cp) {
-  local out = [];
-  if (cp < 0x80) {
-    out.append(cp);
-  } else if (cp < 0x800) {
-    out.append(0xc0 | (cp >>> 6));
-    out.append(0x80 | (cp & 0x3f));
-  } else if (cp < 0x10000) {
-    out.append(0xe0 | (cp >>> 12));
-    out.append(0x80 | ((cp >>> 6) & 0x3f));
-    out.append(0x80 | (cp & 0x3f));
-  } else {
-    out.append(0xf0 | (cp >>> 18));
-    out.append(0x80 | ((cp >>> 12) & 0x3f));
-    out.append(0x80 | ((cp >>> 6) & 0x3f));
-    out.append(0x80 | (cp & 0x3f));
-  }
-  return out;
-};
-
-local stringFromCodepoints = function(cps) {
-  local bytes = [];
-  foreach (cp in cps) foreach (b in encodeCodepoint(cp)) bytes.append(b);
-  return stringFromBytes(bytes);
-};
-
-// utf8Codepoints(s): the code points of a well-formed UTF-8 Squirrel string.
-// A malformed byte is U+FFFD and advances one byte, as Go's range does; the
-// test only feeds it strings a conforming reader produced.
-local utf8Codepoints = function(s) {
-  local b = bytesOfString(s);
-  local out = [];
-  local i = 0;
-  while (i < b.len()) {
-    local c = b[i];
-    local cp = 0xfffd;
-    local n = 1;
-    if (c < 0x80) {
-      cp = c;
-    } else if (c >= 0xc2 && c <= 0xdf && i + 1 < b.len() && (b[i + 1] & 0xc0) == 0x80) {
-      cp = ((c & 0x1f) << 6) | (b[i + 1] & 0x3f);
-      n = 2;
-    } else if (c >= 0xe0 && c <= 0xef && i + 2 < b.len() &&
-               (b[i + 1] & 0xc0) == 0x80 && (b[i + 2] & 0xc0) == 0x80) {
-      cp = ((c & 0x0f) << 12) | ((b[i + 1] & 0x3f) << 6) | (b[i + 2] & 0x3f);
-      n = 3;
-    } else if (c >= 0xf0 && c <= 0xf4 && i + 3 < b.len() &&
-               (b[i + 1] & 0xc0) == 0x80 && (b[i + 2] & 0xc0) == 0x80 && (b[i + 3] & 0xc0) == 0x80) {
-      cp = ((c & 0x07) << 18) | ((b[i + 1] & 0x3f) << 12) |
-           ((b[i + 2] & 0x3f) << 6) | (b[i + 3] & 0x3f);
-      n = 4;
-    }
-    out.append(cp);
-    i += n;
-  }
-  return out;
-};
-
-local unitsFromString = function(s) {
-  local out = [];
-  foreach (cp in utf8Codepoints(s)) {
-    if (cp >= 0x10000) {
-      local v = cp - 0x10000;
-      out.append(0xd800 + (v >>> 10));
-      out.append(0xdc00 + (v & 0x3ff));
-    } else {
-      out.append(cp);
-    }
-  }
-  return out;
-};
-
-local stringFromUnits = function(units) {
-  local cps = [];
-  local i = 0;
-  while (i < units.len()) {
-    local u = units[i];
-    if (u >= 0xd800 && u <= 0xdbff) {
-      check(i + 1 < units.len(), "stringFromUnits: a high surrogate with no low half");
-      local low = units[i + 1];
-      check(low >= 0xdc00 && low <= 0xdfff, "stringFromUnits: a high surrogate with no low half");
-      cps.append(0x10000 + ((u - 0xd800) << 10) + (low - 0xdc00));
-      i += 2;
-    } else {
-      cps.append(u);
-      i++;
-    }
-  }
-  return stringFromCodepoints(cps);
-};
-
 // parseRecordFile(path): the records of a conformance vector file, as tables.
 local parseRecordFile = function(path) {
   local records = [];
@@ -213,7 +124,7 @@ local parseRecordFile = function(path) {
     local t = tokens(line);
     if (t[0] == "operation") {
       rec = { operation = t[1], name = "", params = {}, bytes = [],
-              expect = "refused", value = [], consumed = -1, writer = false };
+              expect = "refused", reason = null, value = [], consumed = -1, writer = false };
     } else if (t[0] == "name") {
       rec.name = t[1];
     } else if (t[0] == "param") {
@@ -222,7 +133,9 @@ local parseRecordFile = function(path) {
       for (local i = 1; i < t.len(); i++) rec.bytes.append(parseHex(t[i]));
     } else if (t[0] == "expect") {
       if (t[1] == "refused") {
+        check(t.len() == 3, rec.name + ": `expect refused` must state one reason");
         rec.expect = "refused";
+        rec.reason = t[2];
       } else {
         rec.expect = "value";
         for (local i = 3; i < t.len(); i++) rec.value.append(parseHex(t[i]));
@@ -278,9 +191,6 @@ local runWriter = function(rec, serialize) {
   } else if (rec.operation == "string") {
     local h = { value = stringFromBytes(rec.value) };
     ok = stream.serializeString(h, param(rec, "buffer_size", 0));
-  } else if (rec.operation == "wstring") {
-    local h = { value = stringFromUnits(rec.value) };
-    ok = stream.serializeWideString(h, param(rec, "buffer_size", 0));
   } else {
     throw "TestSerializeStrings: writer: unknown operation " + rec.operation;
   }
@@ -292,11 +202,10 @@ local runWriter = function(rec, serialize) {
     rec.name + ": writer processed " + stream.bitsProcessed() + " bits, want " + rec.consumed);
 };
 
-// expectedError(rec): the refusal kind the record names.
+// expectedError(rec): the refusal reason the record states (format 2.0).
 local expectedError = function(rec, serialize) {
-  if (rec.name.find("past-end") != null) return serialize.SerializeError.Overflow;
-  if (rec.name.find("align-padding") != null) return serialize.SerializeError.Align;
-  return serialize.SerializeError.ValueOutOfRange;
+  check(rec.reason != null, rec.name + ": a refused record states no reason");
+  return rec.reason;
 };
 
 // runReader(rec, serialize): the read side of a record, accepted or refused.
@@ -344,113 +253,97 @@ local runReader = function(rec, serialize) {
       check(stream.bitsProcessed() == at, rec.name + ": a latched stream moved its bit index");
       check(h.value == "untouched", rec.name + ": a latched read modified the holder");
     }
-  } else if (rec.operation == "wstring") {
-    local h = { value = "untouched" };
-    local ok = stream.serializeWideString(h, param(rec, "buffer_size", 0));
-    if (rec.expect == "value") {
-      check(ok, rec.name + ": the reader refused");
-      check(stream.error() == null, rec.name + ": the reader latched " + stream.error());
-      sameArray(unitsFromString(h.value), rec.value, rec.name + ": read code units");
-      check(stream.bitsProcessed() == rec.consumed,
-        rec.name + ": reader processed " + stream.bitsProcessed() + " bits, want " + rec.consumed);
-    } else {
-      check(!ok, rec.name + ": the reader accepted refused data");
-      check(stream.error() == expectedError(rec, serialize),
-        rec.name + ": reader latched " + stream.error() + ", want " + expectedError(rec, serialize));
-      check(h.value == "untouched", rec.name + ": a refused read modified the holder");
-      local at = stream.bitsProcessed();
-      check(!stream.serializeWideString(h, param(rec, "buffer_size", 0)), rec.name + ": a latched stream read again");
-      check(stream.bitsProcessed() == at, rec.name + ": a latched stream moved its bit index");
-      check(h.value == "untouched", rec.name + ": a latched read modified the holder");
-    }
   } else {
     throw "TestSerializeStrings: reader: unknown operation " + rec.operation;
   }
 };
 
-// runFamilyPin: serialize.go v1.15.1's TestSerializeWideStringFamilyPin.
-local runFamilyPin = function(serialize) {
-  // the family's pinned bytes: length 3 in a 3 bit field, then 0xD83D, 0xDE00,
-  // 0x0041 as 32 bit groups - 99 bits, 13 bytes
-  local pinned = [ 0xeb, 0xc1, 0x06, 0x00, 0x00, 0xf0, 0x06, 0x00,
-                   0x08, 0x02, 0x00, 0x00, 0x00 ];
-
-  // the wire built from raw bit operations must reproduce the literal
-  local raw = serialize.WriteStream(blob(16));
-  raw._put(3, 3);
-  raw._put(0xd83d, 32);
-  raw._put(0xde00, 32);
-  raw._put(0x0041, 32);
-  raw.flush();
-  check(raw.error() == null, "raw wstring pin latched " + raw.error());
-  sameBytes(raw.data(), pinned, "raw wstring pin");
-
-  // the wstring path must produce exactly the pinned bytes
-  local ws = serialize.WriteStream(blob(16));
-  local h = { value = stringFromCodepoints([ 0x1f600, 0x0041 ]) };
-  check(ws.serializeWideString(h, 8), "wstring pin: the writer refused");
-  ws.flush();
-  check(ws.bitsProcessed() == 3 + 3 * 32,
-    "wstring pin: " + ws.bitsProcessed() + " bits, want " + (3 + 3 * 32));
-  sameBytes(ws.data(), pinned, "wstring pin");
-
-  // and the read path recombines the pair into the same string
-  local rs = serialize.ReadStream(makeBlob(pinned));
-  local rh = { value = "untouched" };
-  check(rs.serializeWideString(rh, 8), "wstring pin: the reader refused");
-  check(rh.value == h.value, "wstring pin: read \"" + rh.value + "\", want \"" + h.value + "\"");
-  check(rs.bitsProcessed() == 99, "wstring pin: read " + rs.bitsProcessed() + " bits, want 99");
-
-  // an empty wstring is the zero-bit length field, no alignment anywhere
-  local es = serialize.WriteStream(blob(8));
-  local eh = { value = "" };
-  check(es.serializeWideString(eh, 1), "wstring pin: empty write refused");
-  es.flush();
-  sameBytes(es.data(), [], "wstring pin: empty");
-  check(es.bitsProcessed() == 0, "wstring pin: empty wrote " + es.bitsProcessed() + " bits");
-};
-
-// runLengthValidation: serialize.go v1.15.1's
-// TestWideStringLengthValidatedBeforeNarrowing, at the SQInteger boundary.
+// runLengthValidation: the string length at the buffer boundary. A length of
+// bufferSize-1 fits, a length of bufferSize does not (STANDARD.md, string),
+// and the length is compared at SQInteger width before any length field is
+// written: the whole [1, 2^31) buffer domain is expressible, and one past it
+// is misuse.
 local runLengthValidation = function(serialize) {
-  local bs = 8;
-
-  // a length of bufferSize-1 fits, a length of bufferSize does not: the
-  // terminator the wire does not carry has nowhere to go
   local s7 = "";
   local s8 = "";
   for (local i = 0; i < 7; i++) s7 += "a";
   for (local i = 0; i < 8; i++) s8 += "a";
   local ws = serialize.WriteStream(blob(64));
-  local h7 = { value = s7 };
-  check(ws.serializeWideString(h7, bs), "a 7 unit string must fit buffer size 8");
-  local h8 = { value = s8 };
-  check(!ws.serializeWideString(h8, bs), "an 8 unit string must not fit buffer size 8");
-  check(ws.error() == serialize.SerializeError.ValueOutOfRange,
-    "the 8 unit refusal latched " + ws.error());
+  check(ws.serializeString({ value = s7 }, 8), "a 7 byte string must fit buffer size 8");
+  check(!ws.serializeString({ value = s8 }, 8), "an 8 byte string must not fit buffer size 8");
+  check(ws.error() == serialize.SerializeError.ValueOutOfRange, "the 8 byte refusal latched " + ws.error());
 
-  // one astral code point is two UTF-16 units: buffer size 3 fits it, buffer
-  // size 2 does not, so the check counts units, not code points
-  local astral = { value = stringFromCodepoints([ 0x1f600 ]) };
-  local a3 = serialize.WriteStream(blob(64));
-  check(a3.serializeWideString(astral, 3), "one astral code point is two units and fits buffer size 3");
-  local a2 = serialize.WriteStream(blob(64));
-  check(!a2.serializeWideString(astral, 2), "one astral code point is two units and does not fit buffer size 2");
-  check(a2.error() == serialize.SerializeError.ValueOutOfRange,
-    "the astral refusal latched " + a2.error());
-
-  // the check runs at SQInteger width before any length field is written: the
-  // whole [1, 2^31) buffer domain is expressible, and one past it is misuse
-  local empty = { value = "" };
   local top = serialize.WriteStream(blob(8));
-  check(top.serializeWideString(empty, 0x7fffffff), "buffer size 2^31-1 must be accepted");
+  check(top.serializeString({ value = "" }, 0x7fffffff), "buffer size 2^31-1 must be accepted");
   local tooBig = { value = "" };
-  raises(function() { serialize.WriteStream(blob(8)).serializeWideString(tooBig, 0x80000000); },
+  raises(function() { serialize.WriteStream(blob(8)).serializeString(tooBig, 0x80000000); },
     "serialize: string buffer size must be in [1,1<<31)", "buffer size 2^31");
-  raises(function() { serialize.WriteStream(blob(8)).serializeWideString(tooBig, 0); },
+  raises(function() { serialize.WriteStream(blob(8)).serializeString(tooBig, 0); },
     "serialize: string buffer size must be in [1,1<<31)", "buffer size 0");
-  raises(function() { serialize.WriteStream(blob(8)).serializeWideString(tooBig, -1); },
+  raises(function() { serialize.WriteStream(blob(8)).serializeString(tooBig, -1); },
     "serialize: string buffer size must be in [1,1<<31)", "buffer size -1");
+};
+
+// runStrictWriter: the writer is handed well-formed UTF-8 with no zero byte, as
+// it is handed an int in its range (STANDARD.md, string); anything else is API
+// misuse and raises before any bit moves, on the write and the measure stream
+// and in every stream state (DESIGN.md (g)). Real text in every plane is
+// accepted. Reversed witness: the format 1.1 writer wrote every one of them.
+local runStrictWriter = function(serialize) {
+  local nul = "serialize: a string must not contain a zero byte";
+  local utf8 = "serialize: a string must be well-formed UTF-8";
+  local cases = [
+    { text = stringFromBytes([ 0x00 ]), panic = nul, what = "a lone NUL" },
+    { text = stringFromBytes([ 0x61, 0x00, 0x62 ]), panic = nul, what = "an interior NUL" },
+    { text = stringFromBytes([ 0x02, 0xff, 0x00 ]), panic = nul, what = "a NUL beside an invalid byte" },
+    { text = stringFromBytes([ 0xc0, 0xaf ]), panic = utf8, what = "an overlong slash" },
+    { text = stringFromBytes([ 0xed, 0xa0, 0x80 ]), panic = utf8, what = "an encoded surrogate" },
+    { text = stringFromBytes([ 0xf4, 0x90, 0x80, 0x80 ]), panic = utf8, what = "a code point above 10FFFF" },
+    { text = stringFromBytes([ 0xe7, 0xa2 ]), panic = utf8, what = "a truncated sequence" },
+    { text = stringFromBytes([ 0x80 ]), panic = utf8, what = "a lone continuation byte" },
+  ];
+  foreach (c in cases) {
+    local h = { value = c.text };
+    local latched = serialize.WriteStream(blob(8));
+    latched._room(65);
+    foreach (stream in [serialize.WriteStream(blob(64)), serialize.MeasureStream(), latched]) {
+      local before = stream.bitsProcessed();
+      raises(function() { stream.serializeString(h, 64); }, c.panic, "the writer handed " + c.what);
+      check(stream.bitsProcessed() == before, c.what + ": the raising write moved the bit index");
+    }
+  }
+  // real text travels: CJK, a combining mark, a BOM, U+FFFF and an astral emoji
+  local text = stringFromBytes([ 0xe7, 0xa2, 0x81, 0x65, 0xcc, 0x81, 0xef, 0xbb, 0xbf, 0xef, 0xbf, 0xbf, 0xf0, 0x9f, 0x98, 0x80 ]);
+  local ws = serialize.WriteStream(blob(64));
+  check(ws.serializeString({ value = text }, 64), "real text was refused by the writer: " + ws.error());
+  ws.flush();
+  local back = { value = "" };
+  check(serialize.ReadStream(ws.data()).serializeString(back, 64) && back.value == text, "real text did not round trip byte for byte");
+};
+
+// runAllocateAfterCheck: a string length is checked against the bytes that
+// remain BEFORE the payload is allocated (STANDARD.md Reader Obligations; the
+// 2026-10-22 port brief, allocate-before-check). Four bytes claiming a length
+// near 2^31 are refused as past_end at once, never after a 2 GiB allocation.
+local runAllocateAfterCheck = function(serialize) {
+  local data = makeBlob([ 0xfe, 0xff, 0xff, 0x7f ]);
+  local rs = serialize.ReadStream(data);
+  local h = { value = "untouched" };
+  // a platform may allocate a huge blob lazily, so the witness is the request
+  // itself: the library's blob() resolves through the root table at call
+  // time, so a counting wrapper sees every allocation the read makes
+  local original = ::blob;
+  local largest = 0;
+  ::blob <- function(n = 0) {
+    if (n > largest) largest = n;
+    return original(n);
+  };
+  local accepted = rs.serializeString(h, 0x7fffffff);
+  ::blob <- original;
+  check(largest <= data.len(), "the read allocated " + largest + " bytes for a 4 byte stream before checking the claimed length");
+  check(!accepted, "a 4 byte stream claiming a huge string was accepted");
+  check(rs.error() == serialize.SerializeError.PastEnd, "the huge claimed length latched " + rs.error());
+  check(h.value == "untouched", "the refused huge length modified the holder");
 };
 
 // runMeasure: the measure stream charges the worst case 7 bits per alignment
@@ -468,12 +361,6 @@ local runMeasure = function(serialize) {
   check(ms.bitsProcessed() == 4 + 7 + 6 * 8,
     "measure string " + ms.bitsProcessed() + " bits, want " + (4 + 7 + 48));
 
-  local wh = { value = stringFromCodepoints([ 0x1f600, 0x0041 ]) };
-  local mw = serialize.MeasureStream();
-  check(mw.serializeWideString(wh, 8), "measure wstring refused");
-  check(mw.bitsProcessed() == 3 + 3 * 32,
-    "measure wstring " + mw.bitsProcessed() + " bits, want " + (3 + 96));
-
   // a value over the buffer latches ValueOutOfRange, exactly as Go's measure does
   local long = { value = "0123456789abcdef" };
   local mf = serialize.MeasureStream();
@@ -486,11 +373,10 @@ function TestSerializeStrings() {
   local root = ::SERIALIZE_ROOT;
   local serialize = dofile(root + "/src/serialize.nut", true);
 
-  // (1) every record of the three conformance files, read and written.
+  // (1) every record of the two conformance files, read and written.
   local files = [
-    { name = "bytes.txt", operation = "bytes", count = 11 },
-    { name = "string.txt", operation = "string", count = 38 },
-    { name = "wstring.txt", operation = "wstring", count = 28 },
+    { name = "bytes.txt", operation = "bytes", count = 12 },
+    { name = "string.txt", operation = "string", count = 53 },
   ];
   foreach (spec in files) {
     local records = parseRecordFile(root + "/conformance/" + spec.name);
@@ -512,12 +398,15 @@ function TestSerializeStrings() {
     print("conformance/" + spec.name + ": " + ran + " records read, " + written + " written\n");
   }
 
-  // (2) serialize.go's cross-family wstring pin
-  runFamilyPin(serialize);
-
-  // (3) serialize.go's length-before-narrowing rule
+  // (2) the length rule and the buffer size domain
   runLengthValidation(serialize);
 
-  // (4) the measure stream's bound
+  // (3) the strict writer
+  runStrictWriter(serialize);
+
+  // (4) the length checked before the payload is allocated
+  runAllocateAfterCheck(serialize);
+
+  // (5) the measure stream's bound
   runMeasure(serialize);
 }

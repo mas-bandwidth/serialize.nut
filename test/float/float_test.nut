@@ -49,7 +49,7 @@ local parseVectors = function(root, name) {
       continue;
     }
     local words = split(line, " ");
-    if (cur == null) cur = { op = "", name = "", bytes = [], expect = null, consumed = 0, writer = false };
+    if (cur == null) cur = { op = "", name = "", bytes = [], expect = null, reason = null, consumed = 0, writer = false };
     if (words[0] == "operation") cur.op = words[1];
     else if (words[0] == "name") cur.name = words[1];
     else if (words[0] == "bytes") {
@@ -57,7 +57,7 @@ local parseVectors = function(root, name) {
       for (local i = 1; i < words.len(); i++) cur.bytes.append(parseHex("0x" + words[i]));
     }
     else if (words[0] == "expect") {
-      if (words[1] == "refused") cur.expect = null;
+      if (words[1] == "refused") { cur.expect = null; cur.reason = words[2]; }
       else cur.expect = parseHex(words[3]);
     }
     else if (words[0] == "consumed") cur.consumed = words[1].tointeger();
@@ -167,9 +167,13 @@ function TestSerializeFloat() {
   local serialize = dofile(root + "/src/serialize.nut", true);
   // the float family module, loaded the way the closed loader does
   // (DESIGN.md (f)): vargv[0] is the exports table, vargv[1] the require
-  local m = {};
-  local fn = loadfile(root + "/src/serialize_float.nut", true).bindenv(::getroottable());
-  fn(m, function(name, who = null) { return null; });
+  local srcRequire;
+  srcRequire = function(name, who = null) {
+    local m = {};
+    loadfile(root + "/src/" + name + ".nut", true).bindenv(::getroottable())(m, srcRequire);
+    return m;
+  };
+  local m = srcRequire("serialize_float");
   local fround = m.fround;
   local float32Bits = m.float32Bits;
   local float32FromBits = m.float32FromBits;
@@ -198,12 +202,13 @@ function TestSerializeFloat() {
       local b = blob(rec.bytes.len());
       for (local i = 0; i < rec.bytes.len(); i++) b[i] = rec.bytes[i];
       if (rec.expect == null) {
-        // expect refused: reading past the end must fail, latch Overflow, and
-        // leave the holder untouched (STANDARD.md Reader Obligations)
+        // expect refused: a read past the end (past_end) or a non-finite
+        // pattern (non_finite_float) must fail with the stated reason and leave
+        // the holder untouched (STANDARD.md Reader Obligations; Finite values only)
         local rs = serialize.ReadStream(b);
         local holder = { value = 12345 };
         check(serializeRead(rs, holder) == false, file + "/" + rec.name + " refused read did not fail");
-        check(rs.error() == serialize.SerializeError.Overflow, file + "/" + rec.name + " refused read latched " + rs.error());
+        check(rs.error() == rec.reason, file + "/" + rec.name + " refused read latched " + rs.error() + ", the corpus states " + rec.reason);
         check(holder.value == 12345, file + "/" + rec.name + " refused read touched the holder");
       } else {
         // write: writer canonical, the bytes must match exactly
@@ -234,4 +239,48 @@ function TestSerializeFloat() {
     function(v) { return castf2i(v); },
     function(rs, h) { return rs.serializeDouble(h); },
     function(ws, h) { return ws.serializeDouble(h); }, 8);
+
+  // FINITE VALUES ONLY (STANDARD.md, format 2.0). A write or a measure handed a
+  // non-finite value latches non_finite_float and writes nothing, checked after
+  // the float32 narrowing, so a finite double above FLT_MAX (which narrows to
+  // +inf) is refused by serializeFloat while serializeDouble carries it. A NaN
+  // whose payload lives only in the double's low 29 bits narrows to a NaN, never
+  // to an infinity. Reversed witnesses: the format 1.1 writer wrote every one.
+  local posInf = casti2f(0x7FF0000000000000);
+  local negInf = casti2f(0xFFF0000000000000);
+  local quietNan = casti2f(0x7FF8000000000000);
+  local lowPayloadNan = casti2f(0x7FF0000000000001);
+  local aboveFltMax = casti2f(0x47F0000000000000); // 2^128, finite, past float32's range
+  local refusesWrite = function(write, value, what) {
+    foreach (stream in [serialize.WriteStream(blob(16)), serialize.MeasureStream()]) {
+      check(write(stream, { value = value }) == false, what + ": a non-finite value was accepted");
+      check(stream.error() == serialize.SerializeError.NonFiniteFloat, what + ": latched " + stream.error());
+      check(stream.bitsProcessed() == 0, what + ": wrote " + stream.bitsProcessed() + " bits");
+    }
+  };
+  local writeFloat = function(stream, h) { return stream.serializeFloat(h); };
+  local writeDouble = function(stream, h) { return stream.serializeDouble(h); };
+  foreach (v in [posInf, negInf, quietNan, lowPayloadNan, aboveFltMax, -aboveFltMax]) refusesWrite(writeFloat, v, "float write of 0x" + format("%016x", castf2i(v)));
+  foreach (v in [posInf, negInf, quietNan, lowPayloadNan]) refusesWrite(writeDouble, v, "double write of 0x" + format("%016x", castf2i(v)));
+  check((float32Bits(lowPayloadNan) & 0x7FFFFF) != 0, "a NaN with only low payload bits narrowed to an infinity");
+  local wd = serialize.WriteStream(blob(16));
+  check(wd.serializeDouble({ value = aboveFltMax }), "a finite double above FLT_MAX was refused by serializeDouble");
+  // the first refusal latches: a later finite write fails too, with the same reason
+  local wl = serialize.WriteStream(blob(16));
+  check(wl.serializeFloat({ value = quietNan }) == false && wl.serializeFloat({ value = 1.0 }) == false, "a latched writer accepted a later float");
+  check(wl.error() == serialize.SerializeError.NonFiniteFloat, "the later write changed the reason to " + wl.error());
+  // a full buffer is past_end, a non-finite value is non_finite_float first
+  local full = serialize.WriteStream(blob(0));
+  check(full.serializeFloat({ value = 1.0 }) == false && full.error() == serialize.SerializeError.PastEnd, "a full writer latched " + full.error());
+  local fullNan = serialize.WriteStream(blob(0));
+  check(fullNan.serializeDouble({ value = quietNan }) == false && fullNan.error() == serialize.SerializeError.NonFiniteFloat,
+    "a non-finite value on a full writer latched " + fullNan.error());
+  // negative zero and the subnormals are finite and travel bit for bit
+  foreach (bits in [0x80000000, 0x00000001, 0x807FFFFF]) {
+    local ws = serialize.WriteStream(blob(8));
+    check(ws.serializeFloat({ value = float32FromBits(bits) }), "the finite float pattern 0x" + format("%08x", bits) + " was refused");
+    ws.flush();
+    local h = { value = 0 };
+    check(serialize.ReadStream(ws.data()).serializeFloat(h) && float32Bits(h.value) == bits, "the finite float pattern 0x" + format("%08x", bits) + " did not round trip");
+  }
 }

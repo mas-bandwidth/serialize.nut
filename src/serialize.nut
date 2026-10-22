@@ -1,8 +1,10 @@
 // serialize.nut: a bitpacking serializer for Squirrel, one of the serialize
 // family (C, C++, C#, Dart, Elixir, Go, Java, JavaScript, Rust, ...), which
 // all speak one wire: the same values produce the same bytes in every one.
-// STANDARD.md (vendored verbatim from mas-bandwidth/serialize v1.17.0) is the
-// authority; this library implements format version 1.1 of it. DESIGN.md is
+// STANDARD.md (vendored verbatim from mas-bandwidth/serialize v2.0.0) is the
+// authority; this library implements format version 2.0 of it: the wire
+// carries only integers and bytes, and every value has exactly one encoding,
+// so a packet reader reads its top-level object and then serializeEnd. DESIGN.md is
 // the port's design, and every section cited below is one of its sections.
 //
 // THE ENTRY. This file is the only one a caller runs:
@@ -99,11 +101,11 @@ local lazy = function(family, name, arity) {
   throw "serialize: lazy arity " + arity;
 };
 
-// THE API (DESIGN.md (a)): serialize.go v1.15.1's exports in serialize.js's
+// THE API (DESIGN.md (a)): serialize.go v2.0.0's exports in serialize.js's
 // spelling.
 local api = {
-  // the error kinds latched on a stream (serialize.go ErrOverflow,
-  // ErrValueOutOfRange, ErrAlign); None is a healthy stream
+  // the refusal reasons latched on a stream (STANDARD.md, Refusal reasons;
+  // serialize.go v2's Refusal); None is a healthy stream
   SerializeError = streams.SerializeError,
 
   // the three streams (DESIGN.md (g)); serialize_stream.nut
