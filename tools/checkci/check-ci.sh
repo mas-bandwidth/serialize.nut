@@ -3,8 +3,9 @@
 #
 # DESIGN.md (i) THE RUNNER: the interpreter is fetched and built by
 # `make dist-squirrel`, and its URL and sha256 live in the Makefile and only
-# there. DESIGN.md's pins table: STANDARD.md and conformance/ are vendored
-# from mas-bandwidth/serialize tag v1.17.0.
+# there. DESIGN.md's pins table: STANDARD.md, IMPLEMENTING.md, conformance/
+# and conformance-controls/ are vendored from mas-bandwidth/serialize, at the
+# tag the wire's authority row names (v2.0.0).
 #
 # This reads files only. It fails, naming the file and line, when
 # .github/workflows/ci.yml repeats the interpreter URL or a sha256, when it

@@ -1,15 +1,17 @@
-// TestGoldenWireFormat: serialize-squirrel-conformance. It pins
-// serialize.go v1.15.1's TestGoldenWireFormat golden bytes (goldenWireBytes in
-// .ref/serialize.go/serialize_test.go, pasted as literals): the golden message
-// reads and re-writes byte for byte, and every single-bit flip of a consumed
-// bit is refused or decoded differently. A test passes by returning and fails
-// by throwing (DESIGN.md (i)).
+// TestGoldenWireFormat: serialize-squirrel-conformance, format 2.0. It pins
+// the golden message of STANDARD.md, "The whole message" (106 bytes, the
+// twenty-nine operations ending in end; serialize.go v2.0.0's goldenWireBytes),
+// pasted as literals: the golden message reads, ends exactly, and re-writes
+// byte for byte, and every single-bit flip of the message, padding bits
+// included, is refused or decoded differently. A test passes by returning and
+// fails by throwing (DESIGN.md (i)).
 //
 // The golden message exercises every family of the wire, so its reader and
 // writer legs cross the bits, int, int_relative, float, compressed_float,
 // bytes, string and fixed modules. The single-bit-flip leg is the control
-// STANDARD.md asks for: every consumed bit is meaningful, so flipping one
-// must be refused or change the decoded value.
+// STANDARD.md asks for: with the end, every bit of the message is meaningful
+// (one value has exactly one byte sequence), so flipping any one, the final
+// byte's padding included, must be refused or change the decoded value.
 
 ::GOLDEN_SOFT <- false;
 local check = function(cond, what) {
@@ -21,27 +23,27 @@ local check = function(cond, what) {
 
 local MIN64 = 0x8000000000000000;
 
-// goldenWireBytes: verbatim from serialize.go v1.15.1 serialize_test.go (the
-// C++ test suite's golden wire, 112 bytes).
-local goldenWireBytes = blob(112);
+// goldenWireBytes: verbatim from STANDARD.md, "The whole message" (106 bytes).
+local GOLDEN_BYTES = 106;
+local goldenWireBytes = blob(GOLDEN_BYTES);
 {
   local raw = [
     0x5D, 0xDA, 0xF7, 0xE6, 0xD5, 0x77, 0xDF, 0x56, 0xEF, 0x9F, 0x75, 0x19,
     0x52, 0xBC, 0xDA, 0x0F, 0x49, 0x40, 0xF4, 0x55, 0x55, 0x55, 0x55, 0x55,
     0x55, 0x55, 0xFF, 0xFC, 0xD1, 0x48, 0xE0, 0x59, 0xD1, 0x48, 0xC0, 0x7B,
     0xF3, 0x6A, 0xE2, 0x59, 0xD1, 0x48, 0x84, 0xB7, 0x06, 0xDE, 0xAD, 0xBE,
-    0xEF, 0xCA, 0xFE, 0x01, 0x06, 0x67, 0x6F, 0x6C, 0x64, 0x65, 0x6E, 0xE3,
-    0x21, 0x00, 0x00, 0xC0, 0x21, 0x00, 0x00, 0x00, 0x22, 0x00, 0x00, 0x00,
-    0xC0, 0x60, 0x00, 0x80, 0xA2, 0x7C, 0xFC, 0xEC, 0x26, 0xCB, 0xFF, 0xFF,
-    0x4B, 0x1D, 0x1F, 0xEF, 0xD2, 0x1A, 0x1F, 0x01, 0xE9, 0xFF, 0xFF, 0x09,
-    0x19, 0x2A, 0x3B, 0x4C, 0x5D, 0x6E, 0x7F, 0x78, 0x6F, 0x5E, 0x4D, 0x3C,
-    0x2B, 0x1A, 0x09, 0x04,
+    0xEF, 0xCA, 0xFE, 0x01, 0x06, 0x67, 0x6F, 0x6C, 0x64, 0x65, 0x6E, 0x06,
+    0xE7, 0xA2, 0x81, 0xE7, 0x9F, 0xB3, 0xC0, 0x60, 0x00, 0x80, 0xA2, 0x7C,
+    0xFC, 0xEC, 0x26, 0xCB, 0xFF, 0xFF, 0x4B, 0x1D, 0x1F, 0xEF, 0xD2, 0x1A,
+    0x1F, 0x01, 0xE9, 0xFF, 0xFF, 0x09, 0x19, 0x2A, 0x3B, 0x4C, 0x5D, 0x6E,
+    0x7F, 0x78, 0x6F, 0x5E, 0x4D, 0x3C, 0x2B, 0x1A, 0x09, 0x04,
   ];
-  for (local i = 0; i < 112; i++) goldenWireBytes[i] = raw[i];
+  check(raw.len() == GOLDEN_BYTES, "the golden literal has " + raw.len() + " bytes");
+  for (local i = 0; i < GOLDEN_BYTES; i++) goldenWireBytes[i] = raw[i];
 }
 
-// goldenWireRead(serialize, stream): mirror serialize.go's goldenWireSerialize
-// read side over the 112 golden bytes, returning a table of the decoded values.
+// goldenWireRead(serialize, stream): STANDARD.md's whole message, read over the
+// 106 golden bytes and ended, returning a table of the decoded values.
 local goldenWireRead = function(serialize, stream) {
   local relativeBase = 100;
   local d = {};
@@ -67,7 +69,7 @@ local goldenWireRead = function(serialize, stream) {
   check(stream.serializeBytes(bytes) == true, "bytes");
   d.bytes <- bytes;
   v = { value = "" }; check(stream.serializeString(v, 16) == true, "str"); d.str <- v.value;
-  v = { value = "" }; check(stream.serializeWideString(v, 8) == true, "wstr"); d.wstr <- v.value;
+  v = { value = "" }; check(stream.serializeString(v, 8) == true, "text"); d.text <- v.value;
   check(stream.serializeAlign() == true, "align2");
   v = h(); check(stream.serializeFixed64(v, 8, 8, -100, 100) == true, "fixedQ8_8"); d.fixedQ8_8 <- v.value;
   v = h(); check(stream.serializeFixed64(v, 16, 16, -2000, 2000) == true, "fixedQ16_16"); d.fixedQ16_16 <- v.value;
@@ -76,9 +78,11 @@ local goldenWireRead = function(serialize, stream) {
   check(stream.serializeAlign() == true, "align3");
   v = h(); check(stream.serializeFixed128(v, 112, 16, -144115188075855872, 144115188075855872) == true, "fixedQ112_16Wide"); d.fixedQ112_16Wide <- v.value;
   v = h(); check(stream.serializeFixed128(v, 64, 64, -9223372036854775808, 9223372036854775807) == true, "fixedQ64_64Wide"); d.fixedQ64_64Wide <- v.value;
-  // STANDARD.md's message record: the message ends at bit 891, three bits into
-  // byte 111; the last five bits of the final byte are zero padding.
-  check(stream.bitsProcessed() == 891, "golden message consumed " + stream.bitsProcessed() + " bits");
+  // STANDARD.md, The whole message: the last field ends at bit 843, three bits
+  // into byte 105; the end consumes the final byte's five bits of zero padding
+  check(stream.bitsProcessed() == 843, "golden message fields consumed " + stream.bitsProcessed() + " bits");
+  check(stream.serializeEnd() == true, "end");
+  check(stream.bitsProcessed() == 848, "golden message consumed " + stream.bitsProcessed() + " bits with its end");
   return d;
 };
 
@@ -112,7 +116,7 @@ local sameGolden = function(a, b) {
   if (a.relativeFar != b.relativeFar) return false;
   if (!sameBytes(a.bytes, b.bytes)) return false;
   if (a.str != b.str) return false;
-  if (a.wstr != b.wstr) return false;
+  if (a.text != b.text) return false;
   if (a.fixedQ8_8 != b.fixedQ8_8) return false;
   if (a.fixedQ16_16 != b.fixedQ16_16) return false;
   if (a.fixedQ48_16 != b.fixedQ48_16) return false;
@@ -153,7 +157,7 @@ function TestGoldenWireFormat() {
   for (local i = 0; i < 7; i++) goldenBytesField[i] = goldenWireBytes[45 + i];
   check(ws.serializeBytes(goldenBytesField) == true, "write bytes");
   check(ws.serializeString(w(d.str), 16) == true, "write str");
-  check(ws.serializeWideString(w(d.wstr), 8) == true, "write wstr");
+  check(ws.serializeString(w(d.text), 8) == true, "write text");
   check(ws.serializeAlign() == true, "write align2");
   check(ws.serializeFixed64(w(d.fixedQ8_8), 8, 8, -100, 100) == true, "write fixedQ8_8");
   check(ws.serializeFixed64(w(d.fixedQ16_16), 16, 16, -2000, 2000) == true, "write fixedQ16_16");
@@ -162,16 +166,27 @@ function TestGoldenWireFormat() {
   check(ws.serializeAlign() == true, "write align3");
   check(ws.serializeFixed128(w(d.fixedQ112_16Wide), 112, 16, -144115188075855872, 144115188075855872) == true, "write fixedQ112_16Wide");
   check(ws.serializeFixed128(w(d.fixedQ64_64Wide), 64, 64, -9223372036854775808, 9223372036854775807) == true, "write fixedQ64_64Wide");
+  check(ws.serializeEnd() == true, "write end");
   ws.flush();
-  check(ws.bytesProcessed() == 112, "re-write produced " + ws.bytesProcessed() + " bytes");
+  check(ws.bytesProcessed() == GOLDEN_BYTES, "re-write produced " + ws.bytesProcessed() + " bytes");
   local got = ws.data();
-  check(got.len() == 112, "re-write length " + got.len());
-  for (local i = 0; i < 112; i++) check(got[i] == goldenWireBytes[i], "re-write byte " + i);
+  check(got.len() == GOLDEN_BYTES, "re-write length " + got.len());
+  for (local i = 0; i < GOLDEN_BYTES; i++) check(got[i] == goldenWireBytes[i], "re-write byte " + i);
+  check(d.text == "\xe7\xa2\x81\xe7\x9f\xb3", "the CJK string decoded to other bytes");
 
-  // every single-bit flip of a CONSUMED bit is refused or decodes differently
-  // (the last five bits of the final byte are padding and are not consumed, so
-  // they are outside this loop).
-  for (local bit = 0; bit < 891; bit++) {
+  // a byte past the message is trailing data, refused by the end
+  local longer = blob(GOLDEN_BYTES + 1);
+  for (local i = 0; i < GOLDEN_BYTES; i++) longer[i] = goldenWireBytes[i];
+  local lr = serialize.ReadStream(longer);
+  local refusedLonger = false;
+  ::GOLDEN_SOFT = true;
+  try { goldenWireRead(serialize, lr); } catch (e) { if (e == "GOLDEN_REFUSED") refusedLonger = true; else throw e; }
+  ::GOLDEN_SOFT = false;
+  check(refusedLonger && lr.error() == serialize.SerializeError.TrailingData, "a zero byte past the message was not refused as trailing_data");
+
+  // every single-bit flip of the message, the final byte's padding included, is
+  // refused or decodes differently: with the end, one value has one byte sequence
+  for (local bit = 0; bit < 8 * GOLDEN_BYTES; bit++) {
     local byteIndex = bit >> 3;
     local mask = 1 << (bit & 7);
     local original = goldenWireBytes[byteIndex] & 0xff;

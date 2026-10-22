@@ -5,8 +5,9 @@
 # once, in `make dist-squirrel`. This workflow calls make and never repeats
 # either the URL or the sha256; the cache key is derived from the pin itself.
 #
-# DESIGN.md's pins table makes STANDARD.md and conformance/ VERBATIM copies of
-# mas-bandwidth/serialize tag v1.17.0. The corpus job below holds them to that
+# DESIGN.md's pins table makes STANDARD.md, IMPLEMENTING.md, conformance/ and
+# conformance-controls/ VERBATIM copies of mas-bandwidth/serialize tag v2.0.0
+# (tools/revendor.sh re-vendors them). The corpus job below holds them to that
 # release, never to main: an upstream merge mid-day must not change what a
 # commit's CI proves. Bump the tag family-wide, deliberately.
 #
@@ -68,14 +69,14 @@ jobs:
         run: make fuzz
 
   corpus:
-    name: STANDARD.md and conformance/ match the pinned release
+    name: STANDARD.md, IMPLEMENTING.md, conformance/ and conformance-controls/ match the pinned release
     # THE FORK GUARD: this repository is PUBLIC and these are its own fleet
     # runners, so a pull request from a fork never reaches them
     # (tools/checkci/check-ci.sh holds every job to it).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet, serialize]
     env:
-      SERIALIZE_TAG: v1.17.0
+      SERIALIZE_TAG: v2.0.0
     steps:
       - uses: actions/checkout@v4
 
@@ -85,4 +86,6 @@ jobs:
       - name: The vendored standard and corpus are that release's, byte for byte
         run: |
           diff -ru "$RUNNER_TEMP/serialize/conformance" conformance
+          diff -ru "$RUNNER_TEMP/serialize/conformance-controls" conformance-controls
           diff -ru "$RUNNER_TEMP/serialize/STANDARD.md" STANDARD.md
+          diff -ru "$RUNNER_TEMP/serialize/IMPLEMENTING.md" IMPLEMENTING.md

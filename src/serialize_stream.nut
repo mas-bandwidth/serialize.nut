@@ -12,16 +12,23 @@
 local _M = vargv[0];
 local require = vargv[1];
 
-// THE ERROR KINDS (DESIGN.md (a), (g)): serialize.go's ErrOverflow,
-// ErrValueOutOfRange and ErrAlign. The first error latches on the stream and
-// sticks: every later call fails, consumes nothing and leaves its holder and
-// destination untouched (STANDARD.md, Reader Obligations: the failure is
-// terminal). Only reset clears it.
+// THE REFUSAL REASONS (DESIGN.md (a), (g); STANDARD.md, Refusal reasons): the
+// closed list of eight, each value spelled exactly as STANDARD.md spells it, and
+// serialize.go v2's Refusal sentinels. The FIRST refusal latches on the stream
+// and sticks: every later call fails with that same reason (its echoes keep
+// it), consumes nothing and leaves its holder and destination untouched
+// (STANDARD.md, Reader Obligations: the failure is terminal). Only reset
+// clears it.
 local SerializeError = {
   None = null,
-  Overflow = "overflow",
+  PastEnd = "past_end",
   ValueOutOfRange = "value_out_of_range",
-  Align = "align",
+  NonzeroPadding = "nonzero_padding",
+  TrailingData = "trailing_data",
+  NonFiniteFloat = "non_finite_float",
+  InvalidUtf8 = "invalid_utf8",
+  EmbeddedNul = "embedded_nul",
+  NonCanonical = "non_canonical",
 };
 _M.SerializeError <- SerializeError;
 
@@ -38,7 +45,7 @@ local FAMILY = {
   serializeFloat = "float", serializeDouble = "float",
   serializeCompressedFloat = "compressed_float",
   serializeCompressedFloatPrecomputed = "compressed_float",
-  serializeBytes = "bytes", serializeString = "bytes", serializeWideString = "bytes",
+  serializeBytes = "bytes", serializeString = "bytes",
 };
 _M.FAMILY <- FAMILY;
 
@@ -95,7 +102,7 @@ class Stream {
   // not-implemented error; every serialize method dispatches through it
   function _arm(family, method) { return arm(_kind, family, method); }
 
-  // --- the dispatch: every serialize method of serialize.go v1.15.1's
+  // --- the dispatch: every serialize method of serialize.go v2.0.0's
   // Stream, in serialize.js's spelling (DESIGN.md (a)) -------------------
   function serializeBits(h, bits) { return _arm("bits", "serializeBits")(this, h, bits); }
   function serializeBits64(h, bits) { return _arm("bits", "serializeBits64")(this, h, bits); }
@@ -128,7 +135,11 @@ class Stream {
   }
   function serializeBytes(data) { return _arm("bytes", "serializeBytes")(this, data); }
   function serializeString(h, bufferSize) { return _arm("bytes", "serializeString")(this, h, bufferSize); }
-  function serializeWideString(h, bufferSize) { return _arm("bytes", "serializeWideString")(this, h, bufferSize); }
+
+  // serializeEnd(): the end of the top-level object (STANDARD.md end). On a
+  // write or a measure it emits nothing and costs nothing; a failed stream
+  // still answers false. ReadStream overrides it with the reader's end.
+  function serializeEnd() { return _error == null; }
 
   // serializeObject(object): object.serialize(stream) inline, no bytes of its
   // own (STANDARD.md object). A latched stream does not call it. Anything but
@@ -147,7 +158,7 @@ class Stream {
 // WriteStream(buffer): writes into buffer, a blob whose length is a multiple
 // of 8 bytes (STANDARD.md General Conventions: the stream occupies whole
 // 8-byte words in the writer's buffer). STRICT (DESIGN.md (g)): exactly
-// serialize.go v1.15.1's bytes.
+// serialize.go v2.0.0's bytes.
 class WriteStream extends Stream {
   _buffer = null;
   _capacity = 0;    // bits the buffer holds
@@ -169,12 +180,12 @@ class WriteStream extends Stream {
     _error = null;
   }
 
-  // _room(bits): true when bits more fit; a full buffer latches Overflow
+  // _room(bits): true when bits more fit; a full buffer latches PastEnd
   // (serialize.go WriteStream: a message that does not fit is a runtime
-  // condition); a latched stream is false and latches nothing new
+  // condition, ErrPastEnd); a latched stream is false and latches nothing new
   function _room(bits) {
     if (_error != null) return false;
-    if (_bits + bits > _capacity) return _fail(SerializeError.Overflow);
+    if (_bits + bits > _capacity) return _fail(SerializeError.PastEnd);
     return true;
   }
 
@@ -229,11 +240,26 @@ class ReadStream extends Stream {
   }
 
   // _room(bits): the reader's test, bit_index + n > 8 * bytes fails the read
-  // with Overflow (STANDARD.md Reader Obligations, Reading past the end must
-  // fail); a latched stream is false and latches nothing new
+  // with PastEnd (STANDARD.md Reader Obligations, Reading past the end must be
+  // refused, as past_end); a latched stream is false and latches nothing new
   function _room(bits) {
     if (_error != null) return false;
-    if (_bits + bits > _length) return _fail(SerializeError.Overflow);
+    if (_bits + bits > _length) return _fail(SerializeError.PastEnd);
+    return true;
+  }
+
+  // serializeEnd(): the reader's end (STANDARD.md end; serialize.go
+  // ReadStream.SerializeEnd). A failed stream answers with its first reason;
+  // a whole byte or more left is TrailingData, checked first, so `bits 3; end`
+  // over 0D 00 is trailing_data; otherwise the remaining 0-7 bits are the
+  // final byte's padding, consumed, and any set bit is NonzeroPadding. The
+  // bits of the last field are never examined. An accepted end leaves the
+  // stream exactly consumed: 8 * bytes bits.
+  function serializeEnd() {
+    if (_error != null) return false;
+    local remaining = _length - _bits;
+    if (remaining >= 8) return _fail(SerializeError.TrailingData);
+    if (remaining > 0 && _take(remaining) != 0) return _fail(SerializeError.NonzeroPadding);
     return true;
   }
 

@@ -1,5 +1,5 @@
 # serialize-squirrel-fuzz-differential: the fuzz differential against
-# serialize.go v1.15.1 (fuzz/differential_test.go, fuzz/driver.nut). It needs
+# serialize.go v2.0.0 (fuzz/differential_test.go, fuzz/driver.nut). It needs
 # the pinned interpreter (make dist-squirrel, DESIGN.md (i)) and Go; SQ is the
 # pin the Makefile exports.
 #
