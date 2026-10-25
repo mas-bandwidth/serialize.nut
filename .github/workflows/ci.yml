@@ -68,6 +68,12 @@ jobs:
         if: ${{ hashFiles('fuzz/go.mod') != '' }}
         run: make fuzz
 
+      # the fuzzer's reversed witness: with the Go writer widening each int
+      # range by one bit the differential must go red, by a disagreement
+      - name: Fuzz negative control, only when there is fuzz code
+        if: ${{ hashFiles('fuzz/go.mod') != '' }}
+        run: make fuzz-negative-control
+
   corpus:
     name: STANDARD.md, IMPLEMENTING.md, conformance/ and conformance-controls/ match the pinned release
     # THE FORK GUARD: this repository is PUBLIC and these are its own fleet

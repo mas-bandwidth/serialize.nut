@@ -1,0 +1,101 @@
+# serialize.nut: the nightly extended fuzz, the functional tier's long run of
+# the differential against serialize.go v2.0.0 (fuzz/differential_test.go).
+#
+# ci.yml runs the differential per push as a gate: one round of 2000 programs
+# from the FIXED seed, so a commit's CI is cheap and repeatable. That leaves
+# one gap, the one the C/C++ reference closes with its own nightly-fuzz.yml:
+# nothing ever drew programs past that one seed. So every night this job
+#
+#   1. runs the negative control (make fuzz-negative-control: the Go writer
+#      widens each int range by one bit) from a fresh random seed, and it must
+#      go red by a disagreement: the job proves it can fail before it runs;
+#   2. runs the differential for `duration` seconds (default 3600) of rounds
+#      from a fresh random seed (-seed random; round r uses seed + r). Every
+#      round logs its seed and the one command that replays it alone, e.g.
+#      make fuzz FUZZ_ARGS='-seed 0x...';
+#   3. on a red round, uploads the failing programs (-failures: one file per
+#      red round, holding its seed, its replay command and every disagreement)
+#      and the full log.
+#
+# Scheduled and dispatched only, never on push or pull_request, so the
+# one-minute CI rule is untouched. It runs on the org fleet's nightly runners,
+# never GitHub's hosted machines, as nightly-conformance.yml does; the
+# interpreter pin stays in the Makefile (make dist-squirrel), as in ci.yml.
+
+name: nightly-fuzz
+
+on:
+  schedule:
+    - cron: '20 6 * * *'   # every day at 06:20 UTC
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Seconds of differential rounds to run'
+        type: number
+        default: 3600
+
+jobs:
+  fuzz:
+    name: extended differential against serialize.go
+    # THE FORK GUARD, as every job in ci.yml carries it (this job never runs
+    # on a pull request, but the guard is the rule for the fleet's runners).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, nightly]
+    timeout-minutes: 120
+    env:
+      # a scheduled run has no inputs: the default duration
+      DURATION: ${{ inputs.duration || 3600 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7
+
+      - name: Read the interpreter pin from the Makefile
+        id: pin
+        run: |
+          sha256=$(sed -n 's/^SQUIRREL_SHA256[[:space:]]*:=[[:space:]]*//p' Makefile | head -n 1)
+          version=$(sed -n 's/^SQUIRREL_VERSION[[:space:]]*:=[[:space:]]*//p' Makefile | head -n 1)
+          test -n "$sha256"
+          test -n "$version"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pinned interpreter build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9   # v6
+        with:
+          path: dist
+          key: squirrel-${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.sha256 }}
+
+      - name: Fetch and build the pinned interpreter
+        run: make dist-squirrel
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e   # v7.0.0
+        with:
+          go-version-file: fuzz/go.mod
+          cache-dependency-path: fuzz/go.sum
+
+      - name: The negative control goes red (int range widened by one bit)
+        run: make fuzz-negative-control FUZZ_ARGS='-seed random'
+
+      - name: The differential, for ${{ env.DURATION }} seconds from a random seed
+        run: |
+          set -o pipefail
+          mkdir -p build
+          rm -rf build/fuzz-failures
+          timeout_min=$(( DURATION / 60 + 15 ))
+          make fuzz FUZZ_ARGS="-seed random -duration ${DURATION}s -failures ../build/fuzz-failures" FUZZ_TIMEOUT="${timeout_min}m" 2>&1 | tee build/nightly-fuzz.log
+          {
+            echo "### nightly-fuzz"
+            grep -m 1 -oE 'round 0: seed 0x[0-9a-f]+' build/nightly-fuzz.log || true
+            grep -oE '[0-9]+ rounds of [0-9]+ programs in .*' build/nightly-fuzz.log || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the failing programs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+        with:
+          name: nightly-fuzz-failures-${{ github.run_id }}
+          path: |
+            build/fuzz-failures/
+            build/nightly-fuzz.log
+            build/fuzz-negative-control.log
+          if-no-files-found: warn
+          retention-days: 30
