@@ -851,6 +851,22 @@ local listDir = function(root, dir, suffix, scratchName) {
   return names;
 };
 
+// corpusRoot(root, override): the directory whose conformance/ and
+// conformance-controls/ this runner reads. Unset or empty is the repository
+// root, the vendored copy. Anything else is SERIALIZE_CORPUS_DIR, the nightly
+// conformance functional test's pointer at the reference's current corpus
+// (.github/workflows/nightly-conformance.yml); a relative path is the
+// repository root's, since make runs there. A directory missing either half
+// fails by name, never a quiet fall back to the vendored copy.
+local corpusRoot = function(root, override) {
+  if (override == null || override == "") return root;
+  local dir = override[0] == '/' ? override : root + "/" + override;
+  foreach (sub in ["conformance", "conformance-controls"]) {
+    check(system("test -d '" + dir + "/" + sub + "'") == 0, "SERIALIZE_CORPUS_DIR=" + override + " holds no " + sub + "/");
+  }
+  return dir;
+};
+
 // sabotagedLibrary(root, control): a copy of src/ under build/controls/<rule>/
 // with the control's patches applied, loaded through its own entry (the closed
 // loader resolves modules beside the entry it was loaded from, DESIGN.md (f))
@@ -882,14 +898,16 @@ local readExpected = function(path) {
 function TestConformanceCorpus() {
   local root = ::SERIALIZE_ROOT;
   local serialize = dofile(root + "/src/serialize.nut", true);
+  local corpusDir = corpusRoot(root, getenv("SERIALIZE_CORPUS_DIR"));
+  print("corpus directory: " + corpusDir + "\n");
 
-  local files = listDir(root, root + "/conformance", ".txt", "conformance-listing.txt");
+  local files = listDir(root, corpusDir + "/conformance", ".txt", "conformance-listing.txt");
   check(files.len() > 0, "empty corpus directory");
   local total = 0;
   local corpus = [];
   local names = {};
   foreach (f in files) {
-    local recs = parseRecords(readText(root + "/conformance/" + f));
+    local recs = parseRecords(readText(corpusDir + "/conformance/" + f));
     foreach (rec in recs) {
       // a vector's name is unique across the corpus (STANDARD.md, The vector format)
       check(!(rec.name in names), f + ": the vector name " + rec.name + " is also in " + (rec.name in names ? names[rec.name] : ""));
@@ -906,7 +924,7 @@ function TestConformanceCorpus() {
   // skipped: the reference's own control file, and a scratch file spelling the
   // retired `wstring`, which is an unknown operation in format 2.0.
   local rejected = false;
-  try { runPath(serialize, root + "/conformance-controls/unknown-operation.txt", "control"); } catch (e) { rejected = true; }
+  try { runPath(serialize, corpusDir + "/conformance-controls/unknown-operation.txt", "control"); } catch (e) { rejected = true; }
   check(rejected, "conformance-controls/unknown-operation.txt was not rejected");
   local scratch = root + "/build/conformance-control-wstring.txt";
   local body = "operation wstring\nname control-wstring-is-retired\nparam buffer_size = 8\nbytes 00\nexpect value = 0\nconsumed 3\n";
@@ -928,7 +946,7 @@ function TestConformanceCorpus() {
   // .expected vectors, and no others
   foreach (control in CONTROLS) {
     local lib = sabotagedLibrary(root, control);
-    local expected = readExpected(root + "/conformance-controls/" + control.rule + ".expected");
+    local expected = readExpected(corpusDir + "/conformance-controls/" + control.rule + ".expected");
     local red = {};
     foreach (rec in corpus) {
       local failed = false;
@@ -944,4 +962,34 @@ function TestConformanceCorpus() {
     print("control " + control.rule + ": " + red.len() + " vectors red, exactly its .expected\n");
   }
   check(system("rm -rf '" + root + "/build/controls'") == 0, "could not remove build/controls");
+}
+
+// TestConformanceCorpusDir: unit test of corpusRoot, the SERIALIZE_CORPUS_DIR
+// override. Unset and empty read the vendored copy at the repository root; an
+// absolute or relative directory holding both halves is read in its place; a
+// directory missing either half, or missing altogether, fails by name.
+function TestConformanceCorpusDir() {
+  local root = ::SERIALIZE_ROOT;
+  check(corpusRoot(root, null) == root, "an unset SERIALIZE_CORPUS_DIR is not the repository root");
+  check(corpusRoot(root, "") == root, "an empty SERIALIZE_CORPUS_DIR is not the repository root");
+
+  local rel = "build/corpus-dir-unit";
+  local dir = root + "/" + rel;
+  check(system("rm -rf '" + dir + "' && mkdir -p '" + dir + "/conformance' '" + dir + "/conformance-controls'") == 0, "could not make " + dir);
+  writeBlob(dir + "/conformance/only.txt", stringToBlob("operation bits\n"));
+  check(corpusRoot(root, dir) == dir, "an absolute SERIALIZE_CORPUS_DIR is not read");
+  check(corpusRoot(root, rel) == dir, "a relative SERIALIZE_CORPUS_DIR is not resolved from the repository root");
+  local names = listDir(root, corpusRoot(root, dir) + "/conformance", ".txt", "corpus-dir-unit-listing.txt");
+  check(names.len() == 1 && names[0] == "only.txt", "the override's conformance/ is not the one listed");
+
+  foreach (missing in ["conformance-controls", "conformance"]) {
+    check(system("rm -rf '" + dir + "/" + missing + "'") == 0, "could not remove " + missing);
+    local refused = null;
+    try { corpusRoot(root, dir); } catch (e) { refused = e; }
+    check(refused != null && refused.find("holds no " + missing + "/") != null, "a corpus directory without " + missing + "/ was not refused by name");
+  }
+  local refused = null;
+  try { corpusRoot(root, dir + "-absent"); } catch (e) { refused = e; }
+  check(refused != null && refused.find("SERIALIZE_CORPUS_DIR=") != null, "a missing corpus directory was not refused by name");
+  check(system("rm -rf '" + dir + "'") == 0, "could not remove " + dir);
 }
