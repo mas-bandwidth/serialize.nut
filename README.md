@@ -10,6 +10,6 @@ local rs = serialize.ReadStream(packet);
 if (!rs.serializeObject(message) || !rs.serializeEnd()) print("refused: " + rs.error() + "\n");
 ```
 
-The pinned interpreter is Squirrel 3.2 built sq64 with SQUSEDOUBLE: `make dist-squirrel` builds it and `make test` runs the tests, the conformance corpus and its negative controls; `make fuzz` runs the differential against serialize.go v2.0.0. DESIGN.md is the design.
+The pinned interpreter is Squirrel 3.2 built sq64 with SQUSEDOUBLE: `make dist-squirrel` builds it and `make test` runs the tests, the conformance corpus and its negative controls; `make fuzz` runs the differential against serialize.go v2.0.0 and `make fuzz-negative-control` proves it goes red; the nightly-fuzz workflow runs the same differential for an hour from a random, logged seed (`make fuzz FUZZ_ARGS='-seed 0x...'` replays a round). DESIGN.md is the design.
 
 BSD 3-Clause license.

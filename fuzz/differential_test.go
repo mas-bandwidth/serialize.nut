@@ -38,11 +38,30 @@
 // same sabotaged writer also runs inside every normal run, over the same
 // programs, through the same comparison, and the run fails unless that
 // comparison goes red on it.
+//
+// THE EXTENDED RUN (.github/workflows/nightly-fuzz.yml). With no flags the
+// test is the per-push gate above: one round of 2000 programs from the fixed
+// seed. Three flags extend it without changing that default:
+//
+//	-seed S       the round's seed: a number (0x... or decimal), or "random"
+//	              for one drawn from crypto/rand. Seed S drives PCG(S,
+//	              S^seed1^seed2), so the default S = seed1 is exactly the
+//	              fixed pair above.
+//	-duration D   run rounds until D has elapsed (at least one round); round
+//	              r uses seed S+r. 0, the default, is one round.
+//	-programs N   programs per round (default 2000).
+//	-failures DIR on a red round, write its seed, the command that replays
+//	              it and every disagreement to DIR/round-<seed>.txt.
+//
+// Every round logs its seed and its replay command before it runs, so any red
+// round reproduces alone: make fuzz FUZZ_ARGS='-seed <its seed>'.
 package fuzz
 
 import (
 	"bufio"
 	"bytes"
+	crand "crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -55,6 +74,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	serialize "github.com/mas-bandwidth/serialize.go/v2"
@@ -62,6 +82,13 @@ import (
 
 var sabotageWidenInt = flag.Bool("sabotage-widen-int", false,
 	"test only: the Go writer writes every non-degenerate int range one bit wider, so the differential must go red")
+
+var (
+	seedFlag     = flag.String("seed", "", `the first round's seed: a number (0x... or decimal) or "random"; empty is the fixed per-push seed`)
+	durationFlag = flag.Duration("duration", 0, "run rounds until this much time has elapsed (at least one); 0 is one round")
+	programsFlag = flag.Int("programs", programCount, "programs per round")
+	failuresFlag = flag.String("failures", "", "directory that receives one file per red round: its seed, its replay command and its disagreements")
+)
 
 const (
 	programCount = 2000
@@ -989,7 +1016,100 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 	}
 	driver := filepath.Join(root, "fuzz", "driver.nut")
 
-	g := &gen{r: rand.New(rand.NewPCG(seed1, seed2))}
+	seed, err := parseSeed(*seedFlag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := *programsFlag
+	if count < 1 {
+		t.Fatalf("-programs %d: a round needs at least one program", count)
+	}
+	start := time.Now()
+	rounds := 0
+	for r := uint64(0); ; r++ {
+		s := seed + r
+		t.Logf("round %d: seed %#016x, %d programs (replay: %s)", r, s, count, replay(s, count))
+		disagreements := differentialRound(t, sq, root, driver, s, count)
+		rounds++
+		if len(disagreements) != 0 || t.Failed() {
+			writeFailures(t, s, count, disagreements)
+			break
+		}
+		if *durationFlag <= 0 || time.Since(start) >= *durationFlag {
+			break
+		}
+	}
+	if *durationFlag > 0 {
+		t.Logf("%d rounds of %d programs in %s, seeds %#016x to %#016x", rounds, count, time.Since(start).Round(time.Second), seed, seed+uint64(rounds)-1)
+	}
+}
+
+// parseSeed reads -seed: empty is the fixed per-push seed, "random" draws one
+// from crypto/rand, anything else is a number (0x... or decimal).
+func parseSeed(v string) (uint64, error) {
+	switch v {
+	case "":
+		return seed1, nil
+	case "random":
+		var b [8]byte
+		if _, err := crand.Read(b[:]); err != nil {
+			return 0, fmt.Errorf("-seed random: %v", err)
+		}
+		return binary.LittleEndian.Uint64(b[:]), nil
+	}
+	s, err := strconv.ParseUint(v, 0, 64)
+	if err != nil {
+		return 0, fmt.Errorf("-seed %q: want a number (0x... or decimal) or random: %v", v, err)
+	}
+	return s, nil
+}
+
+// replay is the command that reruns exactly one round.
+func replay(s uint64, count int) string {
+	target := "fuzz"
+	if *sabotageWidenInt {
+		target = "fuzz-negative-control"
+	}
+	return fmt.Sprintf("make %s FUZZ_ARGS='-seed %#016x -programs %d'", target, s, count)
+}
+
+// writeFailures records a red round under -failures, so a scheduled run's
+// failing programs survive the runner.
+func writeFailures(t *testing.T, s uint64, count int, disagreements []string) {
+	t.Helper()
+	if *failuresFlag == "" {
+		return
+	}
+	if err := os.MkdirAll(*failuresFlag, 0o755); err != nil {
+		t.Errorf("-failures: %v", err)
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "seed %#016x\nprograms %d\nsabotage-widen-int %v\nreplay: %s\n", s, count, *sabotageWidenInt, replay(s, count))
+	fmt.Fprintf(&b, "%d disagreements\n", len(disagreements))
+	if len(disagreements) == 0 {
+		b.WriteString("(the round failed without a disagreement: see the test log)\n")
+	}
+	for _, d := range disagreements {
+		b.WriteString("\ndisagreement:\n")
+		b.WriteString(d)
+		b.WriteByte('\n')
+	}
+	path := filepath.Join(*failuresFlag, fmt.Sprintf("round-%016x.txt", s))
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Errorf("-failures: %v", err)
+		return
+	}
+	t.Logf("failing programs written to %s", path)
+}
+
+// differentialRound runs one round of count programs from seed s (PCG(s,
+// s^seed1^seed2); s = seed1 is the fixed per-push pair) and returns its
+// disagreements, each also reported through t.Errorf.
+func differentialRound(t *testing.T, sq, root, driver string, s uint64, count int) []string {
+	t.Helper()
+	programCount := count
+	g := &gen{r: rand.New(rand.NewPCG(s, s^seed1^seed2))}
 	progs := make([]*program, programCount)
 	ops := 0
 	for n := range progs {
@@ -1191,6 +1311,7 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 	if len(disagreements) == 0 {
 		t.Logf("%d programs agree", programCount)
 	}
+	return disagreements
 }
 
 // mutate returns a copy of b with bit flips, a truncation or an extension.
