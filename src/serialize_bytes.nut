@@ -101,10 +101,37 @@ local stringToBlob = function(str) {
   return b;
 };
 
+local BYTE_CHARS = array(256);
+for (local c = 0; c < 256; c++) BYTE_CHARS[c] = c.tochar();
+
+// sliceToString(b, lo, hi): balanced midpoint string assembly over b[lo..hi).
+// Squirrel 3.2 strings are immutable and SQVM::StringCat copies both operands;
+// a left-associative per-byte prefix loop copies n*(n+1)/2 bytes. Splitting at
+// the midpoint bounds recursion depth to ceil(log2(n/4)) + 1 and total copied
+// bytes across tree levels to O(n log n), while each intermediate SQString is
+// released from SQStringTable as soon as its parent concatenation completes.
+local sliceToString = null;
+sliceToString = function(b, lo, hi) {
+  local span = hi - lo;
+  if (span <= 4) {
+    if (span == 4) {
+      return (BYTE_CHARS[b[lo] & 0xff] + BYTE_CHARS[b[lo + 1] & 0xff]) +
+          (BYTE_CHARS[b[lo + 2] & 0xff] + BYTE_CHARS[b[lo + 3] & 0xff]);
+    }
+    if (span == 3) {
+      return BYTE_CHARS[b[lo] & 0xff] + BYTE_CHARS[b[lo + 1] & 0xff] +
+          BYTE_CHARS[b[lo + 2] & 0xff];
+    }
+    if (span == 2) return BYTE_CHARS[b[lo] & 0xff] + BYTE_CHARS[b[lo + 1] & 0xff];
+    if (span == 1) return BYTE_CHARS[b[lo] & 0xff];
+    return "";
+  }
+  local mid = lo + (span >> 1);
+  return sliceToString(b, lo, mid) + sliceToString(b, mid, hi);
+};
+
 local blobToString = function(b) {
-  local s = "";
-  for (local i = 0; i < b.len(); i++) s += (b[i] & 0xff).tochar();
-  return s;
+  return sliceToString(b, 0, b.len());
 };
 
 local hasNul = function(b) {

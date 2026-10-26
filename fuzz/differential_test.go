@@ -1039,6 +1039,9 @@ func TestDifferentialAgainstSerializeGo(t *testing.T) {
 			break
 		}
 	}
+	if !*sabotageWidenInt {
+		differentialStringConversion(t, sq, root, driver)
+	}
 	if *durationFlag > 0 {
 		t.Logf("%d rounds of %d programs in %s, seeds %#016x to %#016x", rounds, count, time.Since(start).Round(time.Second), seed, seed+uint64(rounds)-1)
 	}
@@ -1338,4 +1341,311 @@ func mutate(g *gen, b []byte) ([]byte, string) {
 		m = append(m, byte(g.r.Uint32()))
 	}
 	return m, fmt.Sprintf("extended by %d bytes", n)
+}
+
+// TestDifferentialStringConversion verifies differential agreement between
+// serialize.go v2.0.0 and the Squirrel port across string conversion cases:
+// empty, ASCII across 4-byte leaf and midpoint split boundaries, multibyte and
+// high-bit UTF-8 straddling split boundaries, UTF-8 BOM, Unicode noncharacters,
+// maximum agreed length (bufferSize - 1), truncation, and invalid NUL/UTF-8
+// refusal precedence after prior accepted steps.
+func TestDifferentialStringConversion(t *testing.T) {
+	if *sabotageWidenInt {
+		t.Skip("skipping string conversion differential under -sabotage-widen-int")
+	}
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sq := os.Getenv("SQ")
+	if sq == "" {
+		sq = filepath.Join(root, "dist", "squirrel-3.2", "bin", "sq")
+	}
+	if fi, err := os.Stat(sq); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+		t.Fatalf("the pinned interpreter SQ=%s does not resolve; run make dist-squirrel", sq)
+	}
+	driver := filepath.Join(root, "fuzz", "driver.nut")
+	differentialStringConversion(t, sq, root, driver)
+}
+
+func differentialStringConversion(t *testing.T, sq, root, driver string) {
+	t.Helper()
+
+	type validCase struct {
+		name      string
+		preBits   int
+		bufSize   int
+		payload   []byte
+	}
+	var valid []validCase
+
+	// (1) Empty string across buffer sizes and bit alignments.
+	for _, bs := range []int{1, 2, 16, 4096} {
+		for _, pb := range []int{0, 1, 3, 7} {
+			valid = append(valid, validCase{
+				name:    fmt.Sprintf("empty-bs%d-pb%d", bs, pb),
+				preBits: pb,
+				bufSize: bs,
+				payload: nil,
+			})
+		}
+	}
+
+	// (2) ASCII across leaf (4-byte) and recursive midpoint split boundaries.
+	for _, n := range []int{1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513, 1023, 1024, 2047} {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = byte(0x21 + ((i*73 + 19) % 94))
+		}
+		valid = append(valid, validCase{
+			name:    fmt.Sprintf("ascii-len%d", n),
+			preBits: n % 8,
+			bufSize: n + 1,
+			payload: b,
+		})
+	}
+
+	// (3) Multibyte / high-bit UTF-8 straddling split boundaries.
+	utf8Sample := []byte(
+		"\u0080\u00a2\u07ff" +
+			"\u0800\u20ac\u6f22\ud7ff\ue000" +
+			"\U00010000\U0001f600\U0010ffff",
+	)
+	for shift := 0; shift < 4; shift++ {
+		var buf []byte
+		for s := 0; s < shift; s++ {
+			buf = append(buf, byte('A'+s))
+		}
+		for rep := 0; rep < 24; rep++ {
+			buf = append(buf, utf8Sample...)
+			buf = append(buf, byte('0'+(rep%10)))
+		}
+		valid = append(valid, validCase{
+			name:    fmt.Sprintf("utf8-shift%d-len%d", shift, len(buf)),
+			preBits: (shift * 2) % 8,
+			bufSize: len(buf) + 16,
+			payload: buf,
+		})
+	}
+
+	// (4) UTF-8 BOM (EF BB BF) and (5) Unicode noncharacters.
+	bomAndNonchars := []byte(
+		"\ufeffhello\ufeff" +
+			"\ufdd0\ufdef\ufffe\uffff" +
+			"\U0001fffe\U0001ffff\U0010fffe\U0010ffff" +
+			"\ufeff",
+	)
+	for _, pb := range []int{0, 5} {
+		valid = append(valid, validCase{
+			name:    fmt.Sprintf("bom-nonchars-pb%d", pb),
+			preBits: pb,
+			bufSize: len(bomAndNonchars) + 8,
+			payload: bomAndNonchars,
+		})
+	}
+
+	// (6) Maximum agreed length (bufferSize - 1).
+	for _, bs := range []int{1, 2, 8, 256, 1024, 3072} {
+		b := make([]byte, bs-1)
+		for i := range b {
+			b[i] = byte(0x30 + ((i*41 + 7) % 74))
+		}
+		valid = append(valid, validCase{
+			name:    fmt.Sprintf("max-agreed-bs%d", bs),
+			preBits: bs % 7,
+			bufSize: bs,
+			payload: b,
+		})
+	}
+
+	var reqs []request
+	progs := make([]*program, len(valid))
+	for i, tc := range valid {
+		var steps []step
+		if tc.preBits > 0 {
+			steps = append(steps, step{
+				kind:  "bits",
+				width: tc.preBits,
+				u:     serialize.Uint128{Lo: uint64((1 << tc.preBits) - 1)},
+			})
+		}
+		steps = append(steps,
+			step{kind: "string", width: tc.bufSize, data: tc.payload},
+			step{kind: "end"},
+		)
+		p := &program{n: i, steps: steps, text: programText(steps)}
+		p.goW = goWrite(steps, writeCap, false)
+		if !p.goW.ok {
+			t.Fatalf("%s: serialize.go write refused at step %d (%s)", tc.name, p.goW.idx, p.goW.kind)
+		}
+		self := goRead(steps, p.goW.bytes)
+		if !self.ok {
+			t.Fatalf("%s: serialize.go read refused its own bytes at step %d (%s)", tc.name, self.idx, self.kind)
+		}
+		p.canon = self.vals
+		progs[i] = p
+		id := fmt.Sprintf("v%d", i)
+		reqs = append(reqs,
+			request{id + "w", fmt.Sprintf("w %sw %d %s", id, writeCap, p.text)},
+			request{id + "r", fmt.Sprintf("r %sr %s %s", id, hexBytes(p.goW.bytes), p.text)},
+		)
+	}
+
+	// (7) Refusal cases (truncation, length == bufferSize, EmbeddedNul,
+	// InvalidUtf8, and EmbeddedNul precedence over InvalidUtf8) after a prior
+	// accepted uint16 step so holder/prefix preservation is verified.
+	type rawRefusalCase struct {
+		name    string
+		bufSize int
+		wire    []byte
+	}
+	craftRawWire := func(bufSize, claimedLen int, payload []byte) []byte {
+		ws := serialize.NewWriteStream(make([]byte, writeCap))
+		sentinel := uint16(0x5a3c)
+		if err := ws.SerializeUint16(&sentinel); err != nil {
+			t.Fatal(err)
+		}
+		bits := serialize.BitsRequired(0, uint32(bufSize-1))
+		if bits > 0 {
+			cl := uint32(claimedLen)
+			if err := ws.SerializeBits(&cl, bits); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := ws.SerializeAlign(); err != nil {
+			t.Fatal(err)
+		}
+		for i := range payload {
+			b := payload[i]
+			if err := ws.SerializeUint8(&b); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ws.Flush()
+		return append([]byte(nil), ws.Data()...)
+	}
+
+	nulAfterInvalid := bytes.Repeat([]byte{'a'}, 512)
+	nulAfterInvalid[2] = 0xff
+	nulAfterInvalid[511] = 0x00
+
+	truncatedUtf8Tail := bytes.Repeat([]byte{'a'}, 512)
+	truncatedUtf8Tail[511] = 0xf0
+
+	refusalCases := []rawRefusalCase{
+		{name: "length-equals-bufsize", bufSize: 10, wire: craftRawWire(10, 10, bytes.Repeat([]byte{'a'}, 10))},
+		{name: "truncated-payload-255", bufSize: 256, wire: craftRawWire(256, 255, bytes.Repeat([]byte{'a'}, 240))[:32]},
+		{name: "lone-nul", bufSize: 64, wire: craftRawWire(64, 1, []byte{0x00})},
+		{name: "invalid-utf8-then-nul", bufSize: 64, wire: craftRawWire(64, 2, []byte{0xff, 0x00})},
+		{name: "nul-then-invalid-utf8", bufSize: 64, wire: craftRawWire(64, 2, []byte{0x00, 0xff})},
+		{name: "512b-invalid-utf8-then-trailing-nul", bufSize: 1024, wire: craftRawWire(1024, len(nulAfterInvalid), nulAfterInvalid)},
+		{name: "overlong-2b", bufSize: 64, wire: craftRawWire(64, 2, []byte{0xc0, 0xaf})},
+		{name: "surrogate-d800", bufSize: 64, wire: craftRawWire(64, 3, []byte{0xed, 0xa0, 0x80})},
+		{name: "above-10ffff", bufSize: 64, wire: craftRawWire(64, 4, []byte{0xf4, 0x90, 0x80, 0x80})},
+		{name: "512b-truncated-utf8-tail", bufSize: 1024, wire: craftRawWire(1024, len(truncatedUtf8Tail), truncatedUtf8Tail)},
+	}
+
+	refProgs := make([]*program, len(refusalCases))
+	for i, rc := range refusalCases {
+		steps := []step{
+			{kind: "uint16", u: serialize.Uint128{Lo: 0x5a3c}},
+			{kind: "string", width: rc.bufSize},
+			{kind: "end"},
+		}
+		p := &program{n: i, steps: steps, text: programText(steps)}
+		refProgs[i] = p
+		id := fmt.Sprintf("f%d", i)
+		reqs = append(reqs, request{id, fmt.Sprintf("r %s %s %s", id, hexBytes(rc.wire), p.text)})
+	}
+
+	out := runDriver(t, sq, root, driver, 0, reqs)
+	for i, tc := range valid {
+		p := progs[i]
+		id := fmt.Sprintf("v%d", i)
+		sqW, err := parseResult(out[id+"w"], len(p.steps))
+		if err != nil {
+			t.Fatalf("%s write parse: %v", tc.name, err)
+		}
+		if d := compareWrite(p, p.goW, sqW); d != "" {
+			t.Errorf("%s write disagreement:\n%s", tc.name, d)
+		}
+		sqR, err := parseResult(out[id+"r"], len(p.steps))
+		if err != nil {
+			t.Fatalf("%s read parse: %v", tc.name, err)
+		}
+		if !sqR.ok {
+			t.Errorf("%s: squirrel refused valid bytes at step %d (%s)", tc.name, sqR.idx, sqR.kind)
+		} else if d := compareValues(p, tc.name+": squirrel vs go", sqR.vals, p.canon); d != "" {
+			t.Errorf("%s value disagreement:\n%s", tc.name, d)
+		}
+	}
+
+	for i, rc := range refusalCases {
+		p := refProgs[i]
+		id := fmt.Sprintf("f%d", i)
+		sqR, err := parseResult(out[id], len(p.steps))
+		if err != nil {
+			t.Fatalf("%s parse: %v", rc.name, err)
+		}
+		goR := goRead(p.steps, rc.wire)
+		if goR.ok {
+			t.Fatalf("%s: serialize.go unexpectedly accepted refusal wire", rc.name)
+		}
+		if d := compareReads(p, rc.name, rc.wire, goR, sqR); d != "" {
+			t.Errorf("%s refusal disagreement:\n%s", rc.name, d)
+		}
+	}
+	t.Logf("string conversion differential: %d valid cases and %d refusal cases agree", len(valid), len(refusalCases))
+}
+
+// BenchmarkSquirrelStringConversion is the manual/nightly geometric scaling
+// benchmark for complete ReadStream.serializeString conversion at n, 2n, 4n on
+// the pinned Squirrel 3.2 runtime.
+func BenchmarkSquirrelStringConversion(b *testing.B) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		b.Fatal(err)
+	}
+	sq := os.Getenv("SQ")
+	if sq == "" {
+		sq = filepath.Join(root, "dist", "squirrel-3.2", "bin", "sq")
+	}
+	if fi, err := os.Stat(sq); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+		b.Fatalf("the pinned interpreter SQ=%s does not resolve; run make dist-squirrel", sq)
+	}
+	for _, n := range []int{16384, 32768, 65536} {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			dir := b.TempDir()
+			script := filepath.Join(dir, "bench.nut")
+			code := fmt.Sprintf(`local root = %q;
+local serialize = dofile(root + "/src/serialize.nut", true);
+local n = %d;
+local bufSize = n + 16;
+local raw = blob(n);
+for (local i = 0; i < n; i++) raw[i] = 0x21 + (i %% 90);
+local f = file(%q, "wb");
+f.writeblob(raw);
+f.close();
+local ws = serialize.WriteStream(blob(((n + 32) / 8 + 2) * 8));
+ws.serializeBits({ value = n }, 17);
+ws.serializeBytes(raw);
+ws.flush();
+local wire = ws.data();
+local iters = %d;
+for (local i = 0; i < iters; i++) {
+  local rs = serialize.ReadStream(wire);
+  local h = { value = "" };
+  if (!rs.serializeString(h, bufSize) || h.value.len() != n) throw "bench read failed";
+}
+`, root, n, filepath.Join(dir, "raw.bin"), b.N)
+			if err := os.WriteFile(script, []byte(code), 0o644); err != nil {
+				b.Fatal(err)
+			}
+			b.ResetTimer()
+			cmd := exec.Command(sq, script)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				b.Fatalf("sq failed: %v\n%s", err, string(out))
+			}
+		})
+	}
 }

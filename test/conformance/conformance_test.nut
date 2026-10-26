@@ -152,13 +152,34 @@ local tokens = function(line) {
   return out;
 };
 
+local BYTE_CHARS = array(256);
+for (local c = 0; c < 256; c++) BYTE_CHARS[c] = c.tochar();
+
+local sliceBlobToString = null;
+sliceBlobToString = function(b, lo, hi) {
+  local span = hi - lo;
+  if (span <= 4) {
+    if (span == 4) {
+      return (BYTE_CHARS[b[lo] & 0xff] + BYTE_CHARS[b[lo + 1] & 0xff]) +
+          (BYTE_CHARS[b[lo + 2] & 0xff] + BYTE_CHARS[b[lo + 3] & 0xff]);
+    }
+    if (span == 3) {
+      return BYTE_CHARS[b[lo] & 0xff] + BYTE_CHARS[b[lo + 1] & 0xff] +
+          (BYTE_CHARS[b[lo + 2] & 0xff]);
+    }
+    if (span == 2) return BYTE_CHARS[b[lo] & 0xff] + BYTE_CHARS[b[lo + 1] & 0xff];
+    if (span == 1) return BYTE_CHARS[b[lo] & 0xff];
+    return "";
+  }
+  local mid = lo + (span >> 1);
+  return sliceBlobToString(b, lo, mid) + sliceBlobToString(b, mid, hi);
+};
+
 local readText = function(path) {
   local f = file(path, "rb");
   local b = f.readblob(f.len());
   f.close();
-  local s = "";
-  for (local i = 0; i < b.len(); i++) s += (b[i] & 0xff).tochar();
-  return s;
+  return sliceBlobToString(b, 0, b.len());
 };
 
 local blobOfHexs = function(hexs) {
@@ -961,6 +982,45 @@ function TestConformanceCorpus() {
     check(wrong.len() == 0, "control " + control.rule + " did not fail exactly its .expected vectors");
     print("control " + control.rule + ": " + red.len() + " vectors red, exactly its .expected\n");
   }
+
+  // CONTROL, string-growing-prefix-concat: restoring the old per-byte
+  // immutable concatenation in serialize_bytes.nut is caught by the bounded
+  // midpoint tree call-count check.
+  local countStringConversionCalls = function(lib, n) {
+    local b = blob(((n + 16) / 8 + 2) * 8);
+    local ws = lib.WriteStream(b);
+    local s = "";
+    for (local i = 0; i < n; i++) s += "a";
+    check(ws.serializeString({ value = s }, n + 8), "control string write");
+    ws.flush();
+    local wire = ws.data();
+    local calls = 0;
+    setdebughook(function(ev, src, line, func) {
+      if (ev == 'c' && src != null && src.find("serialize_bytes.nut") != null) calls++;
+    });
+    local h = { value = "" };
+    local rs = lib.ReadStream(wire);
+    local ok = rs.serializeString(h, n + 8);
+    setdebughook(null);
+    check(ok && h.value.len() == n, "control string read");
+    return calls;
+  };
+  check(countStringConversionCalls(serialize, 256) - countStringConversionCalls(serialize, 1) == 126,
+    "live library did not execute balanced midpoint conversion for n=256");
+  local badConcatLib = sabotagedLibrary(root, {
+    rule = "string-growing-prefix-concat",
+    patches = [
+      {
+        file = "serialize_bytes.nut",
+        needle = "local blobToString = function(b) {\n  return sliceToString(b, 0, b.len());\n};",
+        patch = "local blobToString = function(b) {\n  local s = \"\";\n  for (local i = 0; i < b.len(); i++) s += (b[i] & 0xff).tochar(); // NEGATIVE CONTROL\n  return s;\n};",
+      },
+    ],
+  });
+  check(countStringConversionCalls(badConcatLib, 256) - countStringConversionCalls(badConcatLib, 1) != 126,
+    "control string-growing-prefix-concat was not distinguished from balanced conversion");
+  print("control string-growing-prefix-concat: known-bad growing-prefix loop rejected\n");
+
   check(system("rm -rf '" + root + "/build/controls'") == 0, "could not remove build/controls");
 }
 
