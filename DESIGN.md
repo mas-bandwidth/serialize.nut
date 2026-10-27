@@ -13,13 +13,13 @@ already decides.
 |---|---|
 | the reference | `mas-bandwidth/serialize.go` tag `v2.0.0` (`a3ffd9136906dfc4db5b2fb6d146181d749b00c5`, module `github.com/mas-bandwidth/serialize.go/v2`), read, never imported by the library (the fuzz differential imports it) |
 | the closest worked example | `mas-bandwidth/serialize.js` main at `ff765a1a89a89dc3f6e818e553baabf189241b4e` (`src/index.js`, `src/streams.js`), read, never imported |
-| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.0.0` (`8dae4cc08b7b46c9b5fcf08dad5e99ad1348b76b`, the merge of the standard and corpus pin `dedf58efa93832fd243dbf3a2a1ca0a91c46b14b`; `tools/revendor.sh <tag>` re-vendors them) |
+| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.0.1` (`b812b75cc0a75dd925af74103ab1f155b9431ac1`: format 2.0 unchanged, the corpus adds read terminality across a nested object, `3f40cb5f`; `tools/revendor.sh <tag>` re-vendors them) |
 | the number, byte, float32 and loading rules | `mas-bandwidth/schema` `docs/PORT-SQUIRREL.md` at `f676cb9adc8a653abcdce38034e99ec3c3aad6b8` (branch `sprint/schema-squirrel-port-design.w1.g1.e21`), restated in (c) to (f) with no change of substance |
 | the interpreter | Squirrel 3.2, built `sq64` with `-DSQUSEDOUBLE` (`make dist-squirrel`) |
 
 **The vendored copies are the reference's copies.** `diff -r` of this
 repository's `STANDARD.md`, `IMPLEMENTING.md`, `conformance/` and
-`conformance-controls/` against serialize v2.0.0's is empty (the corpus job in
+`conformance-controls/` against serialize v2.0.1's is empty (the corpus job in
 CI holds them to it), so the Go oracle and this port read the same 18 vector
 files and the same standard, byte for byte.
 

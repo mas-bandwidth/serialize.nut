@@ -5,7 +5,7 @@
 # `make dist-squirrel`, and its URL and sha256 live in the Makefile and only
 # there. DESIGN.md's pins table: STANDARD.md, IMPLEMENTING.md, conformance/
 # and conformance-controls/ are vendored from mas-bandwidth/serialize, at the
-# tag the wire's authority row names (v2.0.0).
+# tag the wire's authority row names (v2.0.1).
 #
 # This reads files only. It fails, naming the file and line, when
 # .github/workflows/ci.yml repeats the interpreter URL or a sha256, when it
