@@ -820,6 +820,9 @@ local CONTROLS = [
     { file = "serialize_fixed.nut", needle = "  if (s._error != null) return false;\n  if (p.numBits == 0) { h.value = p.rawMin; return true; }", patch = "  if (p.numBits == 0) { h.value = p.rawMin; return true; } // NEGATIVE CONTROL\n  if (s._error != null) return false;" },
     { file = "serialize_fixed.nut", needle = "  if (s._error != null) return false;\n  if (p.numBits == 0) { h.value = [p.rawMin[0], p.rawMin[1]]; return true; }", patch = "  if (p.numBits == 0) { h.value = [p.rawMin[0], p.rawMin[1]]; return true; } // NEGATIVE CONTROL\n  if (s._error != null) return false;" },
   ] },
+  { rule = "object-terminal", patches = [
+    { file = "serialize_stream.nut", needle = "    if (_error != null) return false;\n    local r = object.serialize(this);\n    if (r != true) return _fail(SerializeError.ValueOutOfRange);\n    return _error == null;", patch = "    local r = object.serialize(this); // NEGATIVE CONTROL\n    if (r != true) return _fail(SerializeError.ValueOutOfRange);\n    return true;" },
+  ] },
   { rule = "float-finite", patches = [
     { file = "serialize_float.nut", needle = "    local bits = s._take(32);\n    if (!floatBitsAreFinite(bits)) return s._fail(SerializeError.NonFiniteFloat);", patch = "    local bits = s._take(32); // NEGATIVE CONTROL" },
   ] },
