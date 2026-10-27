@@ -2,7 +2,7 @@
 # reference's CURRENT corpus.
 #
 # ci.yml holds the vendored conformance/ and conformance-controls/ to the
-# pinned release (v2.0.0), deliberately: an upstream merge mid-day must not
+# pinned ref (SERIALIZE_REF), deliberately: an upstream merge mid-day must not
 # change what a commit's CI proves. That leaves one gap, and this job closes
 # it: nothing checked this port against mas-bandwidth/serialize main as it is
 # tonight. So every night this job

@@ -5,7 +5,7 @@
 # `make dist-squirrel`, and its URL and sha256 live in the Makefile and only
 # there. DESIGN.md's pins table: STANDARD.md, IMPLEMENTING.md, conformance/
 # and conformance-controls/ are vendored from mas-bandwidth/serialize, at the
-# tag the wire's authority row names (v2.0.0).
+# ref (a release tag or a full commit sha) the wire's authority row names.
 #
 # This reads files only. It fails, naming the file and line, when
 # .github/workflows/ci.yml repeats the interpreter URL or a sha256, when it
@@ -77,19 +77,19 @@ check_file() {
 		rc=1
 	fi
 
-	# DESIGN.md's pins table names the corpus release; the workflow must name
-	# the same release.
+	# DESIGN.md's pins table names the corpus ref (a release tag or a full
+	# commit sha); the workflow must name the same ref.
 	local design_tag ci_tag
-	design_tag=$(sed -n "s/.*wire's authority.*tag \`\(v[0-9][0-9.]*\)\`.*/\1/p" "$design" | head -n 1)
-	ci_tag=$(sed -n 's/^[[:space:]]*SERIALIZE_TAG:[[:space:]]*\(v[0-9][0-9.]*\).*/\1/p' "$file" | head -n 1)
+	design_tag=$(sed -nE "s/.*wire's authority.*(tag|commit) \`(v[0-9][0-9.]*|[0-9a-f]{40})\`.*/\2/p" "$design" | head -n 1)
+	ci_tag=$(sed -nE 's/^[[:space:]]*SERIALIZE_REF:[[:space:]]*(v[0-9][0-9.]*|[0-9a-f]{40}).*/\1/p' "$file" | head -n 1)
 	if [ -z "$design_tag" ]; then
 		echo "--- FAIL TestCheckCI ($design: no corpus pin in the wire's authority row)"
 		rc=1
 	elif [ -z "$ci_tag" ]; then
-		echo "--- FAIL TestCheckCI ($file: no SERIALIZE_TAG names the corpus release)"
+		echo "--- FAIL TestCheckCI ($file: no SERIALIZE_REF names the corpus ref)"
 		rc=1
 	elif [ "$ci_tag" != "$design_tag" ]; then
-		echo "--- FAIL TestCheckCI ($file: corpus tag $ci_tag differs from DESIGN.md's $design_tag)"
+		echo "--- FAIL TestCheckCI ($file: corpus ref $ci_tag differs from DESIGN.md's $design_tag)"
 		rc=1
 	fi
 

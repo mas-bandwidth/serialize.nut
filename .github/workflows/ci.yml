@@ -6,10 +6,12 @@
 # either the URL or the sha256; the cache key is derived from the pin itself.
 #
 # DESIGN.md's pins table makes STANDARD.md, IMPLEMENTING.md, conformance/ and
-# conformance-controls/ VERBATIM copies of mas-bandwidth/serialize tag v2.0.0
-# (tools/revendor.sh re-vendors them). The corpus job below holds them to that
-# release, never to main: an upstream merge mid-day must not change what a
-# commit's CI proves. Bump the tag family-wide, deliberately.
+# conformance-controls/ VERBATIM copies of mas-bandwidth/serialize at one
+# pinned ref, a release tag or a full commit sha (format 2.0.1's corpus, commit
+# 3617d360 on main, until the v2.0.1 tag exists; tools/revendor.sh re-vendors
+# them). The corpus job below holds them to that ref, never to main: an
+# upstream merge mid-day must not change what a commit's CI proves. Bump the
+# ref family-wide, deliberately.
 #
 # The jobs run on this repository's own fleet runners (rowan-tools
 # fleet/runners.tsv, set serialize.nut), never GitHub's hosted machines.
@@ -82,12 +84,16 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet, serialize]
     env:
-      SERIALIZE_TAG: v2.0.0
+      SERIALIZE_REF: 3617d3606db9c5686018d6568f0aa761869083c5
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clone the reference at the pinned release
-        run: git clone --quiet --depth 1 --branch "$SERIALIZE_TAG" https://github.com/mas-bandwidth/serialize.git "$RUNNER_TEMP/serialize"
+      - name: Fetch the reference at the pinned ref
+        run: |
+          rm -rf "$RUNNER_TEMP/serialize"
+          git init --quiet "$RUNNER_TEMP/serialize"
+          git -C "$RUNNER_TEMP/serialize" fetch --quiet --depth 1 https://github.com/mas-bandwidth/serialize.git "$SERIALIZE_REF"
+          git -C "$RUNNER_TEMP/serialize" -c advice.detachedHead=false checkout --quiet FETCH_HEAD
 
       - name: The vendored standard and corpus are that release's, byte for byte
         run: |
