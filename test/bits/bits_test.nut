@@ -184,6 +184,7 @@ local stepFromWords = function(text) {
   if (w[0] == "bits" && w.len() == 2) return newStep("bits", w[1].tointeger());
   if (w[0] == "object" && w.len() == 2) return newStep("object", w[1].tointeger());
   if (w[0] == "bytes" && w.len() == 2) return newStep("bytes", w[1].tointeger());
+  if (w[0] == "reject" && w.len() == 1) return newStep("reject", 0);
   throw "TestSerializeBits: no runner for step " + text;
 };
 
@@ -237,7 +238,9 @@ local runStep = function(stream, st) {
 };
 
 local runRange = null;
-runRange = function(stream, steps, lo, hi, state) {
+// nested: inside an object, where `reject` is the object's function failing
+// without refusing on its own; at the top level it is stream.reject()
+runRange = function(stream, steps, lo, hi, state, nested = false) {
   local i = lo;
   while (i < hi) {
     local st = steps[i];
@@ -245,9 +248,13 @@ runRange = function(stream, steps, lo, hi, state) {
       local start = i + 1;
       local end = i + 1 + st.width;
       local inner = { serialize = null };
-      inner.serialize <- function(s) { return runRange(s, steps, start, end, state) == end ? true : false; };
+      inner.serialize <- function(s) { return runRange(s, steps, start, end, state, true) == end ? true : false; };
       if (stream.serializeObject(inner) != true) { state.failed <- i; return i; }
       i = end;
+    } else if (st.kind == "reject") {
+      if (!nested) stream.reject();
+      state.failed <- i;
+      return i;
     } else {
       if (!runStep(stream, st)) { state.failed <- i; return i; }
       i++;

@@ -248,7 +248,7 @@ local float32FromBits = floatMod.float32FromBits;
 local REASONS = {
   past_end = true, value_out_of_range = true, nonzero_padding = true,
   trailing_data = true, non_finite_float = true, invalid_utf8 = true,
-  embedded_nul = true, non_canonical = true,
+  embedded_nul = true, non_canonical = true, rejected = true,
 };
 
 // --- the vector parser (STANDARD.md, "The vector format") --------------------
@@ -353,6 +353,7 @@ local stepFromWords = function(text) {
   else if (w[0] == "float" && w.len() == 1) s = newStep("float");
   else if (w[0] == "double" && w.len() == 1) s = newStep("double");
   else if (w[0] == "uint128" && w.len() == 1) s = newStep("uint128");
+  else if (w[0] == "reject" && w.len() == 1) s = newStep("reject");
   else if (w[0] == "int_relative" && w.len() == 2) {
     s = newStep("int_relative"); s.previous = signed32(number(1)[0]);
   }
@@ -547,7 +548,10 @@ local runSteps;
 local makeNested = function(steps, from, to, state) {
   local o = {};
   o.serialize <- function(stream) {
+    local outer = state.nested;
+    state.nested = true;
     local stop = runSteps(stream, steps, from, to, state);
+    state.nested = outer;
     return stop == to;
   };
   return o;
@@ -562,6 +566,15 @@ runSteps = function(stream, steps, from, to, state) {
       if (!stream.serializeObject(obj)) { state.failed = steps[i]; return i; }
       i += span;
       continue;
+    }
+    // `reject` (STANDARD.md, The vector format): the caller refusing here. At
+    // the top level through the port's reject entry point, stream.reject();
+    // inside an object the object's serialize function returns failure here
+    // without refusing on its own, and serializeObject must latch rejected.
+    if (steps[i].kind == "reject") {
+      state.failed = steps[i];
+      if (!state.nested) stream.reject();
+      return i;
     }
     if (!runStep(stream, steps[i])) {
       state.failed = steps[i];
@@ -633,7 +646,7 @@ local checkTerminal = function(rec, stream) {
 local runReader = function(serialize, rec, steps) {
   seedSentinels(steps);
   local stream = serialize.ReadStream(rec.bytes);
-  local state = { failed = null };
+  local state = { failed = null, nested = false };
   local stoppedAt = runSteps(stream, steps, 0, steps.len(), state);
 
   if (rec.expectKind == "refused") {
@@ -648,7 +661,7 @@ local runReader = function(serialize, rec, steps) {
     local i = stoppedAt + stepSpan(steps, stoppedAt);
     while (i < steps.len()) {
       local span = stepSpan(steps, i);
-      local nextState = { failed = null };
+      local nextState = { failed = null, nested = false };
       local stop = runSteps(stream, steps, i, i + span, nextState);
       check(stop < i + span, rec.name + ": step " + (i + 1) + " succeeded after step " + (stoppedAt + 1) + " was refused");
       i += span;
@@ -679,7 +692,7 @@ local runReader = function(serialize, rec, steps) {
 local runWriter = function(serialize, rec, steps) {
   local cap = ((rec.bytes.len() + 64) / 8 * 8) + 8;
   local stream = serialize.WriteStream(blob(cap));
-  local state = { failed = null };
+  local state = { failed = null, nested = false };
   local stop = runSteps(stream, steps, 0, steps.len(), state);
   check(stop == steps.len(), rec.name + ": the writer refused a canonical vector (step " + (stop + 1) + ")");
   stream.flush();
@@ -692,7 +705,7 @@ local runWriter = function(serialize, rec, steps) {
 
 local runMeasure = function(serialize, rec, steps) {
   local stream = serialize.MeasureStream();
-  local state = { failed = null };
+  local state = { failed = null, nested = false };
   local stop = runSteps(stream, steps, 0, steps.len(), state);
   check(stop == steps.len(), rec.name + ": the measure refused a step, a measure refuses nothing at runtime");
   check(stream.bitsProcessed() >= rec.measureAtLeast,
@@ -727,11 +740,36 @@ local prepare = function(rec) {
   return buildSteps(rec);
 };
 
+// runObjectChecks: the object checks STANDARD.md's object-latch-rejected
+// control describes, driven against every refused vector of object.txt (its
+// vectors, and only its, are named object-*): over the vector's bytes a
+// nested object whose serialize function fails at once, with nothing read,
+// must refuse as rejected; and after the vector's own refusal a nested object
+// that would succeed must refuse and keep the stated reason.
+local runObjectChecks = function(serialize, rec, steps) {
+  local fresh = serialize.ReadStream(rec.bytes);
+  local failing = { serialize = function(stream) { return false; } };
+  check(fresh.serializeObject(failing) == false && fresh.error() == "rejected",
+    rec.name + ": a nested object whose function fails refused as " + fresh.error() + ", not rejected");
+
+  seedSentinels(steps);
+  local stream = serialize.ReadStream(rec.bytes);
+  runSteps(stream, steps, 0, steps.len(), { failed = null, nested = false });
+  local accepting = { serialize = function(stream) { return true; } };
+  check(stream.serializeObject(accepting) == false,
+    rec.name + ": a nested object succeeded on the refused stream; failure is not terminal");
+  check(stream.error() == rec.reason,
+    rec.name + ": the nested object after the refusal changed the reason to " + stream.error());
+};
+
 // runRecord: every leg one record carries; it throws on the first failure
 local runRecord = function(serialize, rec) {
   local steps = prepare(rec);
   check(rec.expectKind != "", rec.name + ": no expect line");
   runReader(serialize, rec, steps);
+  if (rec.expectKind == "refused" && rec.name.len() > 7 && rec.name.slice(0, 7) == "object-") {
+    runObjectChecks(serialize, rec, steps);
+  }
   if (rec.expectKind != "refused") {
     if (rec.writer) runWriter(serialize, rec, steps);
     if (rec.hasMeasure) runMeasure(serialize, rec, steps);
@@ -821,7 +859,13 @@ local CONTROLS = [
     { file = "serialize_fixed.nut", needle = "  if (s._error != null) return false;\n  if (p.numBits == 0) { h.value = [p.rawMin[0], p.rawMin[1]]; return true; }", patch = "  if (p.numBits == 0) { h.value = [p.rawMin[0], p.rawMin[1]]; return true; } // NEGATIVE CONTROL\n  if (s._error != null) return false;" },
   ] },
   { rule = "object-terminal", patches = [
-    { file = "serialize_stream.nut", needle = "    if (_error != null) return false;\n    local r = object.serialize(this);\n    if (r != true) return _fail(SerializeError.ValueOutOfRange);\n    return _error == null;", patch = "    local r = object.serialize(this); // NEGATIVE CONTROL\n    if (r != true) return _fail(SerializeError.ValueOutOfRange);\n    return true;" },
+    { file = "serialize_stream.nut", needle = "    if (_error != null) return false;\n    local r = object.serialize(this);\n    if (r != true) return _fail(SerializeError.Rejected);\n    return _error == null;", patch = "    local r = object.serialize(this); // NEGATIVE CONTROL\n    if (r != true) return _fail(SerializeError.Rejected);\n    return true;" },
+  ] },
+  { rule = "object-latch-rejected", patches = [
+    { file = "serialize_stream.nut", needle = "    if (r != true) return _fail(SerializeError.Rejected);", patch = "    if (r != true) return false; // NEGATIVE CONTROL" },
+  ] },
+  { rule = "reject-reason", patches = [
+    { file = "serialize_stream.nut", needle = "  function reject() { return _fail(SerializeError.Rejected); }", patch = "  function reject() { return false; } // NEGATIVE CONTROL" },
   ] },
   { rule = "float-finite", patches = [
     { file = "serialize_float.nut", needle = "    local bits = s._take(32);\n    if (!floatBitsAreFinite(bits)) return s._fail(SerializeError.NonFiniteFloat);", patch = "    local bits = s._take(32); // NEGATIVE CONTROL" },
