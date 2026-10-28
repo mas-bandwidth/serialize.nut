@@ -66,49 +66,13 @@ local bitlen64 = function(x) {
   return n;
 };
 
-// sub64(a, b): a - b, wrapping modulo 2^64, composed from the 32-bit lanes
-// with an explicit borrow (DESIGN.md (c): a difference that can overflow is
-// never left to signed arithmetic)
-local sub64 = function(a, b) {
-  local alo = a & MASK32;
-  local blo = b & MASK32;
-  local lo = alo - blo;
-  local borrow = alo < blo ? 1 : 0;
-  local ahi = (a >>> 32) & MASK32;
-  local bhi = (b >>> 32) & MASK32;
-  local hi = ahi - bhi - borrow;
-  return ((hi & MASK32) << 32) | (lo & MASK32);
-};
-
-// add64(a, b): a + b, wrapping modulo 2^64 (DESIGN.md (c))
-local add64 = function(a, b) {
-  local alo = a & MASK32;
-  local blo = b & MASK32;
-  local lo = alo + blo;
-  local carry = ucmp64(alo, lo & MASK32) > 0 ? 1 : 0;
-  local hi = ((a >>> 32) & MASK32) + ((b >>> 32) & MASK32) + carry;
-  return ((hi & MASK32) << 32) | (lo & MASK32);
-};
-
-// add128(a, b): a + b, wrapping modulo 2^128 (DESIGN.md (c))
-local add128 = function(a, b) {
-  local lo = a[0] + b[0];
-  local carry = ucmp64(a[0], lo) > 0 ? 1 : 0;
-  local hi = a[1] + b[1] + carry;
-  return [lo, hi];
-};
-
-// shl64(x, n): x << n for n in [0,63], composed from the lanes so the shift
-// count never leaves [0,63] (DESIGN.md (c))
-local shl64 = function(x, n) {
-  if (n == 0) return x;
-  local alo = x & MASK32;
-  local ahi = (x >>> 32) & MASK32;
-  if (n >= 32) return (((alo << (n - 32)) & MASK32) << 32);
-  local lo = (alo << n) & MASK32;
-  local hi = ((ahi << n) | (alo >>> (32 - n))) & MASK32;
-  return (hi << 32) | lo;
-};
+// the 64-bit lanes and the 128-bit sum, from serialize_int128.nut (DESIGN.md
+// (c): a sum, a difference or a shift that can wrap is never left to signed
+// arithmetic, which is C++ undefined behaviour in the VM)
+local sub64 = int128.sub64;
+local add64 = int128.add64;
+local shl64 = int128.shl64;
+local add128 = int128.add;
 
 // fixedPointCapacity(integerBits, signed): the whole-unit bounds a Q format
 // can represent, clamped to the int64 domain the bounds live in; the
@@ -126,18 +90,21 @@ local fixedPointCapacity = function(integerBits, signed) {
 };
 
 // fixedPointParams64(integerBits, fractionBits, min, max): serialize.go v2.0.0's
-// fixedPointParams64 (DESIGN.md (g); STANDARD.md, fixed). It raises
-// panicFixedParams when the Q format or the bounds are misuse, and
-// panicFixedBounds when a whole-unit bound does not fit the format. The raw
+// fixedPointParams64 (DESIGN.md (g); STANDARD.md, fixed). It returns
+// panicFixedParams's text when the Q format or the bounds are misuse, and
+// panicFixedBounds's when a whole-unit bound does not fit the format: a bad
+// declaration, which write and measure raise and a read refuses as
+// ValueOutOfRange, never a raise (IMPLEMENTING.md U7, U16). The raw
 // bounds are whole-unit bounds shifted left by fractionBits in the unsigned
 // domain, where a negative bound wraps two's complement, and the width is the
 // bit length of the raw range (zero for a degenerate range, on every width).
 local fixedPointParams64 = function(integerBits, fractionBits, min, max) {
-  if (integerBits < 1 || fractionBits < 0 || integerBits + fractionBits > 64 || min > max) {
-    throw PANIC_PARAMS;
+  if (typeof integerBits != "integer" || typeof fractionBits != "integer" ||
+      integerBits < 1 || fractionBits < 0 || integerBits + fractionBits > 64 || min > max) {
+    return PANIC_PARAMS;
   }
   local cap = fixedPointCapacity(integerBits, min < 0);
-  if (min < cap[0] || max > cap[1]) throw PANIC_BOUNDS;
+  if (min < cap[0] || max > cap[1]) return PANIC_BOUNDS;
   local rawMin = shl64(min, fractionBits);
   local rawMax = shl64(max, fractionBits);
   local rawRange = sub64(rawMax, rawMin);
@@ -153,11 +120,12 @@ local fixedPointParams64 = function(integerBits, fractionBits, min, max) {
 // that many bits), except a degenerate range, which costs zero bits on every
 // storage width (serialize.go's serialize#54 note; STANDARD.md, fixed).
 local fixedPointParams128 = function(integerBits, fractionBits, min, max) {
-  if (integerBits < 1 || fractionBits < 0 || integerBits + fractionBits != 128 || min > max) {
-    throw PANIC_PARAMS;
+  if (typeof integerBits != "integer" || typeof fractionBits != "integer" ||
+      integerBits < 1 || fractionBits < 0 || integerBits + fractionBits != 128 || min > max) {
+    return PANIC_PARAMS;
   }
   local cap = fixedPointCapacity(integerBits, min < 0);
-  if (min < cap[0] || max > cap[1]) throw PANIC_BOUNDS;
+  if (min < cap[0] || max > cap[1]) return PANIC_BOUNDS;
   local rawMin = int128.lsh(int128.int128From64(min), fractionBits);
   local rawMax = int128.lsh(int128.int128From64(max), fractionBits);
   local rawRange = int128.sub(rawMax, rawMin);
@@ -246,6 +214,7 @@ local measure = {};
 // and writes nothing (DESIGN.md (g)).
 write.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams64(integerBits, fractionBits, min, max);
+  if (typeof p == "string") throw p;
   if (s._error != null) return false;
   local off = sub64(h.value, p.rawMin);
   if (ucmp64(off, p.rawRange) > 0) return s._fail(SerializeError.ValueOutOfRange);
@@ -260,6 +229,7 @@ write.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
 // holder untouched and the stream terminal (DESIGN.md (g)).
 read.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams64(integerBits, fractionBits, min, max);
+  if (typeof p == "string") return s._fail(SerializeError.ValueOutOfRange);
   if (s._error != null) return false;
   if (p.numBits == 0) { h.value = p.rawMin; return true; }
   if (!s._room(p.numBits)) return false;
@@ -274,6 +244,7 @@ read.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
 // serialize.go MeasureStream.SerializeFixed64)
 measure.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams64(integerBits, fractionBits, min, max);
+  if (typeof p == "string") throw p;
   if (s._error != null) return false;
   local off = sub64(h.value, p.rawMin);
   if (ucmp64(off, p.rawRange) > 0) return s._fail(SerializeError.ValueOutOfRange);
@@ -289,6 +260,7 @@ measure.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) 
 // ValueOutOfRange (DESIGN.md (g)).
 write.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams128(integerBits, fractionBits, min, max);
+  if (typeof p == "string") throw p;
   if (s._error != null) return false;
   local off = int128.sub(h.value, p.rawMin);
   if (int128.cmp(off, p.rawRange) > 0) return s._fail(SerializeError.ValueOutOfRange);
@@ -302,6 +274,7 @@ write.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
 // reads (STANDARD.md, fixed; Reader Obligations; DESIGN.md (g))
 read.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams128(integerBits, fractionBits, min, max);
+  if (typeof p == "string") return s._fail(SerializeError.ValueOutOfRange);
   if (s._error != null) return false;
   if (p.numBits == 0) { h.value = [p.rawMin[0], p.rawMin[1]]; return true; }
   if (!s._room(p.numBits)) return false;
@@ -316,6 +289,7 @@ read.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
 // MeasureStream.SerializeFixed128)
 measure.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams128(integerBits, fractionBits, min, max);
+  if (typeof p == "string") throw p;
   if (s._error != null) return false;
   local off = int128.sub(h.value, p.rawMin);
   if (int128.cmp(off, p.rawRange) > 0) return s._fail(SerializeError.ValueOutOfRange);

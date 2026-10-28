@@ -1,0 +1,9 @@
+# The VM's own UBSan reports (make test-ubsan; make/ubsan.mk). Each line names
+# one report that Squirrel 3.2 makes on its own, never one the library's
+# arithmetic causes; a script's signed overflow or lossy shift lands in
+# sqvm.cpp, which is never suppressed here.
+#
+# sqtable.h HashObj hashes a float key as (SQInteger)float, which is out of
+# range for a float above 2^63; a test indexing a table by such a float is
+# legal Squirrel.
+float-cast-overflow:sqtable.h

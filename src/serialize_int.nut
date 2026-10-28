@@ -6,17 +6,38 @@
 // THE NUMBER MODEL (DESIGN.md (c)): one 64-bit SQInteger; uint64 is the same
 // bits. An unsigned comparison is `(a ^ MIN64) < (b ^ MIN64)` with MIN64 =
 // 0x8000000000000000, an unsigned right shift is `>>>`, a shift count stays in
-// [0,63], and nothing overflows (a 64-bit difference is computed as the
-// wrapping subtraction of the bits, which is exact mod 2^64: what Go's
-// `uint64(max) - uint64(min)` is).
+// [0,63], and nothing overflows: an int64 range wider than 2^63 computes its
+// span, offset and value through serialize_int128.nut's 64-bit lanes, exact
+// mod 2^64 (what Go's `uint64(max) - uint64(min)` is), and every narrower
+// range keeps plain arithmetic, where nothing can wrap (wide64 below).
 local _M = vargv[0];
 local require = vargv[1];
 
 local streams = require("serialize_stream");
+local int128 = require("serialize_int128");
 local SerializeError = streams.SerializeError;
 
 local PANIC_MINMAX = "serialize: min must not be greater than max";
+local PANIC_INT32 = "serialize: int bounds must be in [-2147483648, 2147483647]";
+local INT32_MIN = -0x80000000;
+local INT32_MAX = 0x7FFFFFFF;
 local MIN64 = 0x8000000000000000;
+local MAX64 = 0x7FFFFFFFFFFFFFFF;
+
+// the 64-bit lanes (serialize_int128.nut; DESIGN.md (c)): exact modulo 2^64,
+// never a signed overflow in the VM
+local add64 = int128.add64;
+local sub64 = int128.sub64;
+
+// wide64(min, max): true when max - min does not fit in 63 bits, the only
+// int64 ranges whose offset arithmetic can overflow a SQInteger. A range
+// whose bounds share a sign never is; otherwise max - min > MAX64 exactly
+// when max > MAX64 + min, a sum that cannot overflow because min < 0. Every
+// other range keeps plain arithmetic: its span fits, and an offset at most
+// the span added to min is at most max.
+local wide64 = function(min, max) {
+  return min < 0 && max >= 0 && max > MAX64 + min;
+};
 
 // bitlen64(x): the number of bits needed to represent the unsigned 64-bit
 // value x (0 for zero, 64 when the top bit is set)
@@ -47,7 +68,7 @@ local bitsRequired32 = function(min, max) {
 // is exact (STANDARD.md int64; serialize.go BitsRequired64)
 local bitsRequired64 = function(min, max) {
   if (min == max) return 0;
-  return bitlen64(max - min);
+  return bitlen64(wide64(min, max) ? sub64(max, min) : max - min);
 };
 
 local write = {};
@@ -59,6 +80,7 @@ local measure = {};
 // the value is the range (STANDARD.md int). A value outside [min,max] latches
 // ValueOutOfRange and writes nothing (DESIGN.md (g)).
 write.serializeInt <- function(s, h, min, max) {
+  if (min < INT32_MIN || max > INT32_MAX) throw PANIC_INT32;
   if (min > max) throw PANIC_MINMAX;
   if (s._error != null) return false;
   local v = h.value;
@@ -70,9 +92,13 @@ write.serializeInt <- function(s, h, min, max) {
   return true;
 };
 
+// A bad declaration on read (bounds outside int32, or min > max) is never a
+// raise: it refuses ValueOutOfRange before any bit moves, after the failure
+// state, so a failed stream keeps its first reason (IMPLEMENTING.md U5, U7,
+// U16).
 read.serializeInt <- function(s, h, min, max) {
-  if (min > max) throw PANIC_MINMAX;
   if (s._error != null) return false;
+  if (min < INT32_MIN || max > INT32_MAX || min > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired32(min, max);
   if (bits == 0) { h.value = min; return true; }
   if (!s._room(bits)) return false;
@@ -86,6 +112,7 @@ read.serializeInt <- function(s, h, min, max) {
 };
 
 measure.serializeInt <- function(s, h, min, max) {
+  if (min < INT32_MIN || max > INT32_MAX) throw PANIC_INT32;
   if (min > max) throw PANIC_MINMAX;
   if (s._error != null) return false;
   local v = h.value;
@@ -108,7 +135,7 @@ write.serializeInt64 <- function(s, h, min, max) {
   local bits = bitsRequired64(min, max);
   if (bits == 0) return true;
   if (!s._room(bits)) return false;
-  local off = v - min;
+  local off = wide64(min, max) ? sub64(v, min) : v - min;
   if (bits <= 32) {
     s._put(off & 0xFFFFFFFF, bits);
   } else {
@@ -119,8 +146,8 @@ write.serializeInt64 <- function(s, h, min, max) {
 };
 
 read.serializeInt64 <- function(s, h, min, max) {
-  if (min > max) throw PANIC_MINMAX;
   if (s._error != null) return false;
+  if (min > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired64(min, max);
   if (bits == 0) { h.value = min; return true; }
   if (!s._room(bits)) return false;
@@ -132,9 +159,15 @@ read.serializeInt64 <- function(s, h, min, max) {
     local g1 = s._take(bits - 32);
     off = g0 | (g1 << 32);
   }
-  local span = max - min;
-  if ((off ^ MIN64) > (span ^ MIN64)) return s._fail(SerializeError.ValueOutOfRange);
-  h.value = off + min;
+  local value;
+  if (wide64(min, max)) {
+    if ((off ^ MIN64) > (sub64(max, min) ^ MIN64)) return s._fail(SerializeError.ValueOutOfRange);
+    value = add64(off, min);
+  } else {
+    if (off > max - min) return s._fail(SerializeError.ValueOutOfRange);
+    value = off + min;
+  }
+  h.value = value;
   return true;
 };
 

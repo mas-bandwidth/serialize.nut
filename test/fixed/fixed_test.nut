@@ -40,24 +40,42 @@ local ucmp = function(a, b) {
   return 0;
 };
 
+// the test's own 64-bit lanes (DESIGN.md (c)): a sum, a difference or a left
+// shift that can wrap is composed from 32-bit halves, so the oracle never
+// overflows a SQInteger either (make test-ubsan runs it)
+local add64 = function(a, b) {
+  local lo = (a & 0xFFFFFFFF) + (b & 0xFFFFFFFF);
+  local hi = ((a >>> 32) + (b >>> 32) + (lo >>> 32)) & 0xFFFFFFFF;
+  return (hi << 32) | (lo & 0xFFFFFFFF);
+};
+local sub64 = function(a, b) {
+  local lo = (a & 0xFFFFFFFF) - (b & 0xFFFFFFFF);
+  local hi = ((a >>> 32) - (b >>> 32) - (lo < 0 ? 1 : 0)) & 0xFFFFFFFF;
+  return (hi << 32) | (lo & 0xFFFFFFFF);
+};
+local shl64 = function(x, n) {
+  if (n == 0) return x;
+  return (x & (0xFFFFFFFFFFFFFFFF >>> n)) << n;
+};
+
 local usub = function(a, b) {
-  local lo = a[0] - b[0];
+  local lo = sub64(a[0], b[0]);
   local br = ucmp([a[0], 0], [b[0], 0]) < 0 ? 1 : 0;
-  local hi = a[1] - b[1] - br;
+  local hi = sub64(sub64(a[1], b[1]), br);
   return [lo, hi];
 };
 
 local uadd = function(a, b) {
-  local lo = a[0] + b[0];
+  local lo = add64(a[0], b[0]);
   local ca = ucmp([a[0], 0], [lo, 0]) > 0 ? 1 : 0;
-  local hi = a[1] + b[1] + ca;
+  local hi = add64(add64(a[1], b[1]), ca);
   return [lo, hi];
 };
 
 local lsh = function(x, n) {
   if (n == 0) return x;
-  if (n < 64) return [(x[0] << n), ((x[1] << n) | (x[0] >>> (64 - n)))];
-  return [0, x[0] << (n - 64)];
+  if (n < 64) return [shl64(x[0], n), (shl64(x[1], n) | (x[0] >>> (64 - n)))];
+  return [0, shl64(x[0], n - 64)];
 };
 
 local mul10 = function(x) { return uadd(lsh(x, 3), lsh(x, 1)); };
@@ -246,8 +264,8 @@ local runFile = function(serialize, name) {
 };
 
 // the raw (scaled) bounds of a Q format, independently of the codec
-local rawMin64 = function(cfg) { return cfg.min << cfg.fractionBits; };
-local rawMax64 = function(cfg) { return cfg.max << cfg.fractionBits; };
+local rawMin64 = function(cfg) { return shl64(cfg.min, cfg.fractionBits); };
+local rawMax64 = function(cfg) { return shl64(cfg.max, cfg.fractionBits); };
 
 function TestSerializeFixed() {
   local serialize = dofile(::SERIALIZE_ROOT + "/src/serialize.nut", true);
@@ -256,23 +274,39 @@ function TestSerializeFixed() {
   // every record of fixed.txt, the count checked against the file's own
   runFile(serialize, "fixed");
 
-  // every misuse rule raises serialize.go's panic text, in every stream state
-  // (DESIGN.md (g); serialize.go panicFixedParams and panicFixedBounds)
-  local w = serialize.WriteStream(blob(64));
-  local r = serialize.ReadStream(blob(64));
-  local m = serialize.MeasureStream();
-  foreach (s in [w, r, m]) {
-    raises(function() { s.serializeFixed64({ value = 0 }, 0, 0, 0, 0); }, PANIC_PARAMS, "integer bits 0");
-    raises(function() { s.serializeFixed64({ value = 0 }, 8, -1, 0, 0); }, PANIC_PARAMS, "fraction bits -1");
-    raises(function() { s.serializeFixed64({ value = 0 }, 64, 1, 0, 0); }, PANIC_PARAMS, "Q format past 64 bits");
-    raises(function() { s.serializeFixed64({ value = 0 }, 8, 8, 100, -100); }, PANIC_PARAMS, "min > max");
-    raises(function() { s.serializeFixed64({ value = 0 }, 8, 0, -129, 0); }, PANIC_BOUNDS, "signed min below capacity");
-    raises(function() { s.serializeFixed64({ value = 0 }, 8, 0, 0, 256); }, PANIC_BOUNDS, "unsigned max above capacity");
-
-    raises(function() { s.serializeFixed128({ value = [0, 0] }, 64, 63, 0, 0); }, PANIC_PARAMS, "wide Q format not 128 bits");
-    raises(function() { s.serializeFixed128({ value = [0, 0] }, 0, 128, 0, 0); }, PANIC_PARAMS, "wide integer bits 0");
-    raises(function() { s.serializeFixed128({ value = [0, 0] }, 64, 64, 1, -1); }, PANIC_PARAMS, "wide min > max");
-    raises(function() { s.serializeFixed128({ value = [0, 0] }, 32, 96, -2147483649, 0); }, PANIC_BOUNDS, "wide min below capacity");
+  // every bad declaration raises serialize.go's panic text on write and
+  // measure (DESIGN.md (g); serialize.go panicFixedParams and
+  // panicFixedBounds), and on read refuses ValueOutOfRange before any bit
+  // moves, the holder untouched, never a raise (IMPLEMENTING.md U7, U16;
+  // reversed witness: the 2.1.0 port raised on read too)
+  local bad = [
+    { wide = false, ib = 0, fb = 0, min = 0, max = 0, panic = PANIC_PARAMS, what = "integer bits 0" },
+    { wide = false, ib = 8, fb = -1, min = 0, max = 0, panic = PANIC_PARAMS, what = "fraction bits -1" },
+    { wide = false, ib = 64, fb = 1, min = 0, max = 0, panic = PANIC_PARAMS, what = "Q format past 64 bits" },
+    { wide = false, ib = 8, fb = 8, min = 100, max = -100, panic = PANIC_PARAMS, what = "min > max" },
+    { wide = false, ib = 8.5, fb = 0, min = 0, max = 0, panic = PANIC_PARAMS, what = "integer bits not an integer" },
+    { wide = false, ib = 8, fb = 0, min = -129, max = 0, panic = PANIC_BOUNDS, what = "signed min below capacity" },
+    { wide = false, ib = 8, fb = 0, min = 0, max = 256, panic = PANIC_BOUNDS, what = "unsigned max above capacity" },
+    { wide = true, ib = 64, fb = 63, min = 0, max = 0, panic = PANIC_PARAMS, what = "wide Q format not 128 bits" },
+    { wide = true, ib = 0, fb = 128, min = 0, max = 0, panic = PANIC_PARAMS, what = "wide integer bits 0" },
+    { wide = true, ib = 64, fb = 64, min = 1, max = -1, panic = PANIC_PARAMS, what = "wide min > max" },
+    { wide = true, ib = 32, fb = 96, min = -2147483649, max = 0, panic = PANIC_BOUNDS, what = "wide min below capacity" },
+  ];
+  foreach (c in bad) {
+    local call = function(st, h) {
+      return c.wide ? st.serializeFixed128(h, c.ib, c.fb, c.min, c.max) : st.serializeFixed64(h, c.ib, c.fb, c.min, c.max);
+    };
+    local v = c.wide ? [0, 0] : 0;
+    foreach (st in [serialize.WriteStream(blob(64)), serialize.MeasureStream()]) {
+      raises(function() { call(st, { value = v }); }, c.panic, c.what);
+    }
+    local r = serialize.ReadStream(blob(64));
+    local h = { value = "untouched" };
+    check(call(r, h) == false && r.error() == "value_out_of_range" && h.value == "untouched" && r.bitsProcessed() == 0,
+      c.what + ": the read did not refuse value_out_of_range with nothing read and the holder untouched");
+    local rf = serialize.ReadStream(blob(0));
+    rf.serializeBits({ value = 0 }, 1);
+    check(call(rf, { value = 0 }) == false && rf.error() == "past_end", c.what + ": a failed read changed its reason to " + rf.error());
   }
 
   // the wire is serializeInt64 of the raw value over the raw bounds: fixed

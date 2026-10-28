@@ -86,5 +86,8 @@ function TestSerializeEnd() {
   check(ms.serializeEnd() && ms.bitsProcessed() == 0, "the measure's end charged " + ms.bitsProcessed() + " bits");
   local wf = serialize.WriteStream(blob(8));
   wf._room(65);
-  check(wf.serializeEnd() == false && wf.error() == E.PastEnd, "a failed writer's end answered " + wf.error());
+  // U12 (IMPLEMENTING.md): end on a write or a measure is a no-op returning
+  // true, whatever the stream's state; the failure is still the stream's.
+  // Reversed witness: the 2.1.0 port's end answered false on a failed writer.
+  check(wf.serializeEnd() == true && wf.error() == E.PastEnd, "a failed writer's end answered false, or changed the reason to " + wf.error());
 }

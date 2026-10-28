@@ -77,7 +77,7 @@ local goldenWireRead = function(serialize, stream) {
   v = h(); check(stream.serializeFixed64(v, 16, 16, 0, 30000) == true, "fixedQ16_16Unsigned"); d.fixedQ16_16Unsigned <- v.value;
   check(stream.serializeAlign() == true, "align3");
   v = h(); check(stream.serializeFixed128(v, 112, 16, -144115188075855872, 144115188075855872) == true, "fixedQ112_16Wide"); d.fixedQ112_16Wide <- v.value;
-  v = h(); check(stream.serializeFixed128(v, 64, 64, -9223372036854775808, 9223372036854775807) == true, "fixedQ64_64Wide"); d.fixedQ64_64Wide <- v.value;
+  v = h(); check(stream.serializeFixed128(v, 64, 64, 0x8000000000000000, 0x7FFFFFFFFFFFFFFF) == true, "fixedQ64_64Wide"); d.fixedQ64_64Wide <- v.value;
   // STANDARD.md, The whole message: the last field ends at bit 843, three bits
   // into byte 105; the end consumes the final byte's five bits of zero padding
   check(stream.bitsProcessed() == 843, "golden message fields consumed " + stream.bitsProcessed() + " bits");
@@ -165,7 +165,7 @@ function TestGoldenWireFormat() {
   check(ws.serializeFixed64(w(d.fixedQ16_16Unsigned), 16, 16, 0, 30000) == true, "write fixedQ16_16Unsigned");
   check(ws.serializeAlign() == true, "write align3");
   check(ws.serializeFixed128(w(d.fixedQ112_16Wide), 112, 16, -144115188075855872, 144115188075855872) == true, "write fixedQ112_16Wide");
-  check(ws.serializeFixed128(w(d.fixedQ64_64Wide), 64, 64, -9223372036854775808, 9223372036854775807) == true, "write fixedQ64_64Wide");
+  check(ws.serializeFixed128(w(d.fixedQ64_64Wide), 64, 64, 0x8000000000000000, 0x7FFFFFFFFFFFFFFF) == true, "write fixedQ64_64Wide");
   check(ws.serializeEnd() == true, "write end");
   ws.flush();
   check(ws.bytesProcessed() == GOLDEN_BYTES, "re-write produced " + ws.bytesProcessed() + " bytes");
