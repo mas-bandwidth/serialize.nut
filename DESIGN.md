@@ -13,13 +13,13 @@ already decides.
 |---|---|
 | the reference | `mas-bandwidth/serialize.go` tag `v2.0.0` (`a3ffd9136906dfc4db5b2fb6d146181d749b00c5`, module `github.com/mas-bandwidth/serialize.go/v2`), read, never imported by the library (the fuzz differential imports it) |
 | the closest worked example | `mas-bandwidth/serialize.js` main at `ff765a1a89a89dc3f6e818e553baabf189241b4e` (`src/index.js`, `src/streams.js`), read, never imported |
-| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.1.0` (`884bc3098c9619d67308d9c6b5cdf38593d98b69`: format 2.0 unchanged; standard 2.1 adds the `rejected` refusal reason, the `reject` step and the U1-U16 rules of IMPLEMENTING.md; `tools/revendor.sh <tag>` re-vendors them) |
+| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.1.1` (`bd3d67e23c8acc2c45eff69633dbe16c029a2cba`: format 2.0 unchanged; standard 2.1 adds the `rejected` refusal reason, the `reject` step and the U1-U16 rules of IMPLEMENTING.md, and 2.1.1 the U3, U6, U9 and U15 rulings; the corpus is unchanged since v2.1.0; `tools/revendor.sh <tag>` re-vendors them) |
 | the number, byte, float32 and loading rules | `mas-bandwidth/schema` `docs/PORT-SQUIRREL.md` at `f676cb9adc8a653abcdce38034e99ec3c3aad6b8` (branch `sprint/schema-squirrel-port-design.w1.g1.e21`), restated in (c) to (f) with no change of substance |
 | the interpreter | Squirrel 3.2, built `sq64` with `-DSQUSEDOUBLE` (`make dist-squirrel`) |
 
 **The vendored copies are the reference's copies.** `diff -r` of this
 repository's `STANDARD.md`, `IMPLEMENTING.md`, `conformance/` and
-`conformance-controls/` against serialize v2.1.0's is empty (the corpus job in
+`conformance-controls/` against serialize v2.1.1's is empty (the corpus job in
 CI holds them to it), so the Go oracle and this port read the same 18 vector
 files and the same standard, byte for byte.
 
