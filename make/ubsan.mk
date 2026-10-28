@@ -19,5 +19,10 @@ dist-squirrel-ubsan: dist-squirrel
 .PHONY: test-ubsan
 test-ubsan:
 	@if [ ! -x "$(SQ_UBSAN)" ]; then echo "test-ubsan REFUSES: $(SQ_UBSAN) does not resolve; run make dist-squirrel-ubsan"; exit 1; fi
+	@mkdir -p build
+	@if UBSAN_OPTIONS=halt_on_error=1 "$(SQ_UBSAN)" tools/ubsan/witness.nut > build/ubsan-witness.txt 2>&1; then \
+		cat build/ubsan-witness.txt; echo "FAIL test-ubsan: the witness overflow did not halt the UBSan interpreter"; exit 1; fi
+	@grep -q 'runtime error' build/ubsan-witness.txt || { cat build/ubsan-witness.txt; echo "FAIL test-ubsan: the witness failed, but not by a UBSan report"; exit 1; }
+	@echo "ok test-ubsan witness: a script's signed overflow halts the interpreter"
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1:suppressions=$(CURDIR)/tools/ubsan/suppressions.txt \
 		$(MAKE) --no-print-directory test SQ=$(SQ_UBSAN) T=$(T)
