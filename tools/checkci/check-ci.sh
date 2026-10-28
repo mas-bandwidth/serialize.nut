@@ -9,7 +9,7 @@
 #
 # This reads files only. It fails, naming the file and line, when
 # .github/workflows/ci.yml repeats the interpreter URL or a sha256, when it
-# does not run `make dist-squirrel` and `make test`, or when its corpus tag
+# does not run `make dist-squirrel`, `make test` and `make test-ubsan`, or when its corpus tag
 # differs from DESIGN.md's, when a job runs on anything but this repository's
 # fleet set [self-hosted, Linux, X64, fleet, serialize], or when a job lacks
 # the fork guard. Its own controls are scratch copies of ci.yml with a pasted
@@ -74,6 +74,12 @@ check_file() {
 	fi
 	if ! grep -vE '^[[:space:]]*#' "$file" | grep -qE '(^|[^[:alnum:]_-])make[[:space:]]+test([^[:alnum:]_-]|$)'; then
 		echo "--- FAIL TestCheckCI ($file: no line runs make test)"
+		rc=1
+	fi
+	# DESIGN.md (c): the UBSan leg, the witness that the library never
+	# overflows (make/ubsan.mk)
+	if ! grep -vE '^[[:space:]]*#' "$file" | grep -qE '(^|[^[:alnum:]_-])make[[:space:]]+test-ubsan([^[:alnum:]_-]|$)'; then
+		echo "--- FAIL TestCheckCI ($file: no line runs make test-ubsan)"
 		rc=1
 	fi
 
@@ -147,6 +153,17 @@ if [ "$control_rc" -eq 0 ]; then
 	exit 1
 fi
 echo "control: a scratch ci.yml without the fork guard fails as it must:"
+printf '%s\n' "$control" | sed 's/^/  /'
+
+# THE UBSAN CONTROL. A workflow that dropped the UBSan leg must be red.
+grep -vE 'make[[:space:]]+test-ubsan' "$ci" > "$scratch/ci-no-ubsan.yml"
+control_rc=0
+control=$(check_file "$scratch/ci-no-ubsan.yml") || control_rc=$?
+if [ "$control_rc" -eq 0 ]; then
+	echo "--- FAIL TestCheckCI (control: a scratch ci.yml without make test-ubsan was accepted)"
+	exit 1
+fi
+echo "control: a scratch ci.yml without make test-ubsan fails as it must:"
 printf '%s\n' "$control" | sed 's/^/  /'
 
 if ! check_file "$ci"; then

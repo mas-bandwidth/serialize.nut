@@ -66,49 +66,13 @@ local bitlen64 = function(x) {
   return n;
 };
 
-// sub64(a, b): a - b, wrapping modulo 2^64, composed from the 32-bit lanes
-// with an explicit borrow (DESIGN.md (c): a difference that can overflow is
-// never left to signed arithmetic)
-local sub64 = function(a, b) {
-  local alo = a & MASK32;
-  local blo = b & MASK32;
-  local lo = alo - blo;
-  local borrow = alo < blo ? 1 : 0;
-  local ahi = (a >>> 32) & MASK32;
-  local bhi = (b >>> 32) & MASK32;
-  local hi = ahi - bhi - borrow;
-  return ((hi & MASK32) << 32) | (lo & MASK32);
-};
-
-// add64(a, b): a + b, wrapping modulo 2^64 (DESIGN.md (c))
-local add64 = function(a, b) {
-  local alo = a & MASK32;
-  local blo = b & MASK32;
-  local lo = alo + blo;
-  local carry = ucmp64(alo, lo & MASK32) > 0 ? 1 : 0;
-  local hi = ((a >>> 32) & MASK32) + ((b >>> 32) & MASK32) + carry;
-  return ((hi & MASK32) << 32) | (lo & MASK32);
-};
-
-// add128(a, b): a + b, wrapping modulo 2^128 (DESIGN.md (c))
-local add128 = function(a, b) {
-  local lo = a[0] + b[0];
-  local carry = ucmp64(a[0], lo) > 0 ? 1 : 0;
-  local hi = a[1] + b[1] + carry;
-  return [lo, hi];
-};
-
-// shl64(x, n): x << n for n in [0,63], composed from the lanes so the shift
-// count never leaves [0,63] (DESIGN.md (c))
-local shl64 = function(x, n) {
-  if (n == 0) return x;
-  local alo = x & MASK32;
-  local ahi = (x >>> 32) & MASK32;
-  if (n >= 32) return (((alo << (n - 32)) & MASK32) << 32);
-  local lo = (alo << n) & MASK32;
-  local hi = ((ahi << n) | (alo >>> (32 - n))) & MASK32;
-  return (hi << 32) | lo;
-};
+// the 64-bit lanes and the 128-bit sum, from serialize_int128.nut (DESIGN.md
+// (c): a sum, a difference or a shift that can wrap is never left to signed
+// arithmetic, which is C++ undefined behaviour in the VM)
+local sub64 = int128.sub64;
+local add64 = int128.add64;
+local shl64 = int128.shl64;
+local add128 = int128.add;
 
 // fixedPointCapacity(integerBits, signed): the whole-unit bounds a Q format
 // can represent, clamped to the int64 domain the bounds live in; the

@@ -261,10 +261,17 @@ it the same way.
   halves (or, for an offset, as the wrapping subtraction of the bits, which is
   exact mod 2^64 and is what Go's `uint64(max) - uint64(min)` is).
 - **Overflow is the C compiler's, so the library never overflows.** SQInteger
-  arithmetic is C `long long`, where signed overflow is undefined: values are
-  composed from bytes with shifts and masks only; every shift count stays in
-  [0, 63] (a shift by 64 is undefined too); a 64-bit difference that can
-  overflow is computed as the two 32-bit lanes with an explicit borrow.
+  arithmetic is C `long long`, where signed overflow is undefined, and so is a
+  left shift of a negative value or one that loses bits: values are composed
+  from bytes with shifts and masks only; every shift count stays in [0, 63] (a
+  shift by 64 is undefined too); a sum, a difference or a left shift that can
+  wrap goes through the 64-bit lanes `add64`, `sub64` and `shl64`
+  (`serialize_int128.nut`), composed from the two 32-bit halves with an
+  explicit carry or borrow. An int64 range narrower than 2^63 keeps plain
+  arithmetic (its span fits, and min plus an offset at most the span is at
+  most max); only a wider range takes the lanes. `make test-ubsan` runs every
+  test on the pin built with `-fsanitize=undefined` (make/ubsan.mk) and CI
+  runs it on every push: it is this rule's witness.
 - **Literals.** −2^63 and every uint64 above 2^63 − 1 are written as sixteen
   hex digits: the lexer cannot read −2^63's magnitude in decimal.
 - **128 bits is two halves**: an int128, a uint128 and a 128-bit fixed point
@@ -491,7 +498,7 @@ same way.
 | `src/serialize_bitpacker.nut` | serialize-squirrel-bitpacker | `BitWriter(buffer)`: `writeBits(value, bits)` bits in [1,32], `writeAlign()`, `writeBytes(data, offset, n)`, `flushBits()`, `alignBits()`, `bitsWritten()`, `bitsAvailable()`, `bytesWritten()`, `data()`; `BitReader(data)`: `wouldReadPastEnd(bits)`, `readBits(bits)` bits in [1,32], `readAlign()` (true when the padding is zero), `readBytes(dest, offset, n)`, `alignBits()`, `bitsRead()`, `bitsRemaining()` | none |
 | `src/serialize_bits.nut` | serialize-squirrel-bits | `bitsRequired(min, max)`, `bitsRequired64(min, max)`, `bitsRequired128(min, max)`, `signedToUnsigned(n)`, `unsignedToSigned(n)` | `serializeBits(s, h, bits)`, `serializeBits64(s, h, bits)`, `serializeBool(s, h)`, `serializeUint8(s, h)`, `serializeUint16(s, h)`, `serializeUint32(s, h)`, `serializeUint64(s, h)`, `serializeAlign(s)` |
 | `src/serialize_int.nut` | serialize-squirrel-int | none | `serializeInt(s, h, min, max)`, `serializeInt64(s, h, min, max)` |
-| `src/serialize_int128.nut` | serialize-squirrel-int | `int128From64(x)`, `uint128From64(x)`, and the two-lane helpers `serialize_fixed.nut` uses (`sub`, `cmp`, `lsh`, `rsh`, each on `[lo, hi]`) | `serializeInt128(s, h, min, max)`, `serializeUint128(s, h)` |
+| `src/serialize_int128.nut` | serialize-squirrel-int | `int128From64(x)`, `uint128From64(x)`, the two-lane helpers `serialize_fixed.nut` uses (`add`, `sub`, `cmp`, `lsh`, `rsh`, each on `[lo, hi]`), and the 64-bit lanes `add64`, `sub64`, `shl64` (c) that `serialize_int.nut`, `serialize_bits.nut` and `serialize_fixed.nut` use | `serializeInt128(s, h, min, max)`, `serializeUint128(s, h)` |
 | `src/serialize_fixed.nut` | serialize-squirrel-fixed | none | `serializeFixed64(s, h, integerBits, fractionBits, min, max)`, `serializeFixed128(s, h, integerBits, fractionBits, min, max)` |
 | `src/serialize_int_relative.nut` | serialize-squirrel-int-relative | none | `serializeIntRelative(s, previous, h)` |
 | `src/serialize_float.nut` | serialize-squirrel-float | `fround(x)`, `float32Bits(x)` (the 32 bits of fround(x)), `float32FromBits(i)` (the double holding them), `floatBitsAreFinite(i)` | `serializeFloat(s, h)`, `serializeDouble(s, h)` |
@@ -500,7 +507,7 @@ same way.
 
 A family requires another only through `require` (the int_relative arms
 reach `serialize_int`'s, compressed_float reaches `serialize_float`'s
-`fround`, fixed reaches `serialize_int128`'s helpers). A card's own make
+`fround`, fixed, int and bits reach `serialize_int128`'s helpers and lanes). A card's own make
 targets go in its own `make/<card>.mk` (the Makefile's `-include make/*.mk`),
 and its tests in its own `test/<card>/` directory.
 

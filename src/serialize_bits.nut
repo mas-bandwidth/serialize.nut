@@ -35,14 +35,11 @@ local bitlen = function(n) {
   return b;
 };
 
-// u128 helpers on [lo, hi] arrays: unsigned 128-bit comparison, subtraction
-// (mod 2^128) and bit length. The lanes are SQIntegers; the unsigned
-// comparison is the XOR-with-MIN trick (DESIGN.md (c)).
-local u128sub = function(a, b) {
-  local lo = a[0] - b[0];
-  local borrow = ((a[0] ^ 0x8000000000000000) < (b[0] ^ 0x8000000000000000)) ? 1 : 0;
-  return [lo, a[1] - b[1] - borrow];
-};
+// the 64-bit and 128-bit wrapping differences, from serialize_int128.nut's
+// lanes (DESIGN.md (c): a difference that can wrap is never left to signed
+// arithmetic, which is C++ undefined behaviour in the VM); required on the
+// first range pricing, never by the arms
+local lanes = function() { return require("serialize_int128"); };
 local u128len = function(a) {
   if (a[1] != 0) return 64 + bitlen(a[1]);
   return bitlen(a[0]);
@@ -54,15 +51,15 @@ local u128len = function(a) {
 // (STANDARD.md, int: a degenerate range costs zero bits).
 _M.bitsRequired <- function(min, max) {
   if (min == max) return 0;
-  return bitlen(max - min);
+  return bitlen(lanes().sub64(max, min));
 };
 _M.bitsRequired64 <- function(min, max) {
   if (min == max) return 0;
-  return bitlen(max - min);
+  return bitlen(lanes().sub64(max, min));
 };
 _M.bitsRequired128 <- function(min, max) {
   if (min[0] == max[0] && min[1] == max[1]) return 0;
-  return u128len(u128sub(max, min));
+  return u128len(lanes().sub(max, min));
 };
 // signedToUnsigned / unsignedToSigned: serialize.go v2.0.0's int32 / uint32
 // zig-zag (serialize.go's serialize.go: SignedToUnsigned uses uint32(n) << 1

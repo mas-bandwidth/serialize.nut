@@ -49,13 +49,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dist
-          key: squirrel-${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.sha256 }}
+          key: squirrel-${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.sha256 }}-${{ hashFiles('tools/ubsan/build.sh') }}
 
       - name: Fetch and build the pinned interpreter
         run: make dist-squirrel
 
       - name: Test
         run: make test
+
+      # DESIGN.md (c), "the library never overflows": the same pin built with
+      # -fsanitize=undefined, and every test run on it; a signed overflow or a
+      # lossy shift in the library's arithmetic halts the run (make/ubsan.mk)
+      - name: Build the UBSan interpreter
+        run: make dist-squirrel-ubsan
+
+      - name: Test under UBSan
+        run: make test-ubsan
 
       - name: Go, only when there is fuzz code
         if: ${{ hashFiles('fuzz/go.mod') != '' }}

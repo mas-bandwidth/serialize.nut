@@ -40,24 +40,42 @@ local ucmp = function(a, b) {
   return 0;
 };
 
+// the test's own 64-bit lanes (DESIGN.md (c)): a sum, a difference or a left
+// shift that can wrap is composed from 32-bit halves, so the oracle never
+// overflows a SQInteger either (make test-ubsan runs it)
+local add64 = function(a, b) {
+  local lo = (a & 0xFFFFFFFF) + (b & 0xFFFFFFFF);
+  local hi = ((a >>> 32) + (b >>> 32) + (lo >>> 32)) & 0xFFFFFFFF;
+  return (hi << 32) | (lo & 0xFFFFFFFF);
+};
+local sub64 = function(a, b) {
+  local lo = (a & 0xFFFFFFFF) - (b & 0xFFFFFFFF);
+  local hi = ((a >>> 32) - (b >>> 32) - (lo < 0 ? 1 : 0)) & 0xFFFFFFFF;
+  return (hi << 32) | (lo & 0xFFFFFFFF);
+};
+local shl64 = function(x, n) {
+  if (n == 0) return x;
+  return (x & (0xFFFFFFFFFFFFFFFF >>> n)) << n;
+};
+
 local usub = function(a, b) {
-  local lo = a[0] - b[0];
+  local lo = sub64(a[0], b[0]);
   local br = ucmp([a[0], 0], [b[0], 0]) < 0 ? 1 : 0;
-  local hi = a[1] - b[1] - br;
+  local hi = sub64(sub64(a[1], b[1]), br);
   return [lo, hi];
 };
 
 local uadd = function(a, b) {
-  local lo = a[0] + b[0];
+  local lo = add64(a[0], b[0]);
   local ca = ucmp([a[0], 0], [lo, 0]) > 0 ? 1 : 0;
-  local hi = a[1] + b[1] + ca;
+  local hi = add64(add64(a[1], b[1]), ca);
   return [lo, hi];
 };
 
 local lsh = function(x, n) {
   if (n == 0) return x;
-  if (n < 64) return [(x[0] << n), ((x[1] << n) | (x[0] >>> (64 - n)))];
-  return [0, x[0] << (n - 64)];
+  if (n < 64) return [shl64(x[0], n), (shl64(x[1], n) | (x[0] >>> (64 - n)))];
+  return [0, shl64(x[0], n - 64)];
 };
 
 local mul10 = function(x) { return uadd(lsh(x, 3), lsh(x, 1)); };
@@ -246,8 +264,8 @@ local runFile = function(serialize, name) {
 };
 
 // the raw (scaled) bounds of a Q format, independently of the codec
-local rawMin64 = function(cfg) { return cfg.min << cfg.fractionBits; };
-local rawMax64 = function(cfg) { return cfg.max << cfg.fractionBits; };
+local rawMin64 = function(cfg) { return shl64(cfg.min, cfg.fractionBits); };
+local rawMax64 = function(cfg) { return shl64(cfg.max, cfg.fractionBits); };
 
 function TestSerializeFixed() {
   local serialize = dofile(::SERIALIZE_ROOT + "/src/serialize.nut", true);
