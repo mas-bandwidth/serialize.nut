@@ -74,7 +74,9 @@ function TestSmoke() {
   if (failure != null) throw failure;
 
   check(typeof serialize == "table", "the entry returned " + typeof serialize + ", not the API table");
-  check(serialize.dir == root + "/src", "the loader resolves " + serialize.dir + ", not " + root + "/src");
+  // the loader's directory is internal (IMPLEMENTING.md U15, the export
+  // ruling): not on the API table
+  check(!("dir" in serialize), "the API table exports the loader's dir");
 
   // every API name DESIGN.md lists exists
   local names = designNames(root);
@@ -150,17 +152,17 @@ function TestSmoke() {
   check(rs2.ok(), "reset did not clear the latch");
 
   // the write capacity and the measure bound (DESIGN.md (g)): a write past the
-  // buffer latches PastEnd; a measure refuses nothing and charges 7 per align
-  check(ws._room(128) && !ws._room(129) && ws.error() == serialize.SerializeError.PastEnd, "the write capacity");
-  local wa = serialize.WriteStream(blob(8));
-  check(!wa._room(65) && wa.serializeAlign() == false, "an aligned align succeeded on a failed writer");
+  // buffer traps (IMPLEMENTING.md U9, U10); a measure has no room to run out
+  // of and charges 7 per align
+  check(ws._room(128), "the write capacity");
+  raises(function() { ws._room(129); }, "serialize: write misuse: ", "a write past the capacity");
+  check(ws.error() == serialize.SerializeError.None, "the write trap latched " + ws.error());
   check(ms._room(1 << 40) && ms.alignBits() == 7, "the measure bound");
-  // a failed measure stream is terminal: once it latches (here a non-finite
-  // float) every later call refuses and charges nothing. Reversed witness: the
-  // format 1.1 measure arms of bits, bool, the uints, align and compressed
-  // float charged and returned true.
+  // write misuse on a measure traps and latches nothing (U6, U9): every later
+  // call charges as it would have. Reversed witness: the 2.1.0 measure latched
+  // non_finite_float and refused every later call.
   local mf = serialize.MeasureStream();
-  check(mf.serializeFloat({ value = casti2f(0x7FF8000000000000) }) == false, "the measure accepted a NaN");
+  raises(function() { mf.serializeFloat({ value = casti2f(0x7FF8000000000000) }); }, "serialize: write misuse: ", "a measure of a NaN");
   local mcalls = [
     function() { return mf.serializeBits({ value = 1 }, 3); },
     function() { return mf.serializeBits64({ value = 1 }, 40); },
@@ -172,10 +174,10 @@ function TestSmoke() {
     function() { return mf.serializeAlign(); },
     function() { return mf.serializeCompressedFloat({ value = 1.0 }, 0.0, 10.0, 0.01); },
   ];
-  foreach (i, call in mcalls) check(call() == false, "measure call " + i + " succeeded on a failed measure stream");
+  foreach (i, call in mcalls) check(call() == true, "measure call " + i + " failed after a trapped measure");
   // end on a measure is a no-op returning true, whatever its state (U12)
-  check(mf.serializeEnd() == true, "the failed measure's end answered false; end on a measure is a no-op returning true (U12)");
-  check(mf.bitsProcessed() == 0 && mf.error() == serialize.SerializeError.NonFiniteFloat,
-    "the failed measure charged " + mf.bitsProcessed() + " bits, reason " + mf.error());
+  check(mf.serializeEnd() == true, "the measure's end answered false; end on a measure is a no-op returning true (U12)");
+  check(mf.bitsProcessed() == 3 + 40 + 1 + 8 + 16 + 32 + 64 + 7 + 10 && mf.error() == serialize.SerializeError.None,
+    "the measure charged " + mf.bitsProcessed() + " bits, reason " + mf.error());
   raises(function() { serialize.WriteStream(blob(12)); }, "serialize: bit writer buffer size must be a multiple of 8 bytes", "a 12-byte buffer");
 }

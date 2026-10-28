@@ -25,10 +25,12 @@
 //                                             a read the values decoded before it
 //
 // <kind> is the stream's first refusal reason, spelled as STANDARD.md spells it
-// (format 2.0, Refusal reasons). A refused read whose destination was written
-// answers kind `touched:<kind>`,
-// so the differential goes red on it (DESIGN.md (g): a refusal leaves the
-// caller's destination untouched).
+// (format 2.0, Refusal reasons). A write latches nothing: its misuse traps
+// (IMPLEMENTING.md U9), and the driver answers the room trap as past_end, the
+// reason serialize.go returns there, and any other trap as trap. A refused
+// read whose destination was written answers kind `touched:<kind>`, so the
+// differential goes red on it (DESIGN.md (g): a refusal leaves the caller's
+// destination untouched).
 //
 // THE PROGRAM TEXT: steps one after another, each `<kind> <params> <value>`;
 // a number is 32 hex digits, the 128-bit two's complement (signed kinds sign
@@ -311,6 +313,24 @@ local runOne = function(stream, s, i, st) {
   return ok;
 };
 
+// runStep: one step. On a write, misuse traps (IMPLEMENTING.md U9) and
+// latches nothing, so the trap is caught here and answered as the step's
+// refusal: the room trap as past_end, the reason serialize.go's WriteStream
+// returns at the same step (a short buffer, the differential's check 4), and
+// any other trap as trap, which no Go answer equals, so it goes red.
+// A read never traps (U7): a throw on a read reaches stderr and fails the
+// batch.
+local ROOM_TRAP = "serialize: write misuse: an operation that does not fit the room left in the buffer";
+local runStep = function(stream, s, i, st) {
+  if (!stream.isWriting()) return runOne(stream, s, i, st);
+  try {
+    return runOne(stream, s, i, st);
+  } catch (e) {
+    if (st.trap == null) st.trap = e == ROOM_TRAP ? "past_end" : "trap";
+    return false;
+  }
+};
+
 local runSteps;
 local makeNested = function(steps, from, to, st) {
   local o = {};
@@ -334,7 +354,7 @@ runSteps = function(stream, steps, from, to, st) {
       i += 1 + s.width;
       continue;
     }
-    if (!runOne(stream, s, i, st)) {
+    if (!runStep(stream, s, i, st)) {
       if (st.failed == null) st.failed = i;
       return i;
     }
@@ -344,6 +364,7 @@ runSteps = function(stream, steps, from, to, st) {
 };
 
 local kindOf = function(stream, st) {
+  if (st.trap != null) return st.trap;
   local e = stream.error();
   local k = e == null ? "none" : e;
   return st.touched ? "touched:" + k : k;
@@ -358,7 +379,7 @@ while (cur.p < N) {
   if (op == "w") {
     local capacity = dec();
     local steps = parseSteps();
-    local st = { vals = array(steps.len(), "-"), failed = null, touched = false };
+    local st = { vals = array(steps.len(), "-"), failed = null, touched = false, trap = null };
     local ws = serialize.WriteStream(blob(capacity));
     local stop = runSteps(ws, steps, 0, steps.len(), st);
     if (stop == steps.len()) {
@@ -372,7 +393,7 @@ while (cur.p < N) {
   } else if (op == "r") {
     local data = xblob();
     local steps = parseSteps();
-    local st = { vals = array(steps.len(), "-"), failed = null, touched = false };
+    local st = { vals = array(steps.len(), "-"), failed = null, touched = false, trap = null };
     local rs = serialize.ReadStream(data);
     local stop = runSteps(rs, steps, 0, steps.len(), st);
     local n = steps.len();

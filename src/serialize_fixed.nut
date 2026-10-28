@@ -210,12 +210,11 @@ local measure = {};
 
 // serializeFixed64(s, h, integerBits, fractionBits, min, max): the 64-bit
 // fixed point write (STANDARD.md, fixed; serialize.go SerializeFixed64).
-// Misuse raises; a raw value outside the raw bounds latches ValueOutOfRange
-// and writes nothing (DESIGN.md (g)).
+// A bad declaration, or a raw value outside the raw bounds, is write misuse:
+// it traps and writes nothing (IMPLEMENTING.md U9; DESIGN.md (g)).
 write.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams64(integerBits, fractionBits, min, max);
   if (typeof p == "string") throw p;
-  if (s._error != null) return false;
   local off = sub64(h.value, p.rawMin);
   if (ucmp64(off, p.rawRange) > 0) return s._fail(SerializeError.ValueOutOfRange);
   if (!s._room(p.numBits)) return false;
@@ -245,7 +244,6 @@ read.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
 measure.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams64(integerBits, fractionBits, min, max);
   if (typeof p == "string") throw p;
-  if (s._error != null) return false;
   local off = sub64(h.value, p.rawMin);
   if (ucmp64(off, p.rawRange) > 0) return s._fail(SerializeError.ValueOutOfRange);
   if (!s._room(p.numBits)) return false;
@@ -256,12 +254,11 @@ measure.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) 
 // serializeFixed128(s, h, integerBits, fractionBits, min, max): the wide fixed
 // point write, storage exactly 128 bits (STANDARD.md, fixed; serialize.go
 // SerializeFixed128). A value is [lo, hi]; the raw offset and range run in the
-// unsigned 128-bit domain, and a raw value outside the raw bounds latches
-// ValueOutOfRange (DESIGN.md (g)).
+// unsigned 128-bit domain, and a raw value outside the raw bounds traps
+// (IMPLEMENTING.md U9; DESIGN.md (g)).
 write.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams128(integerBits, fractionBits, min, max);
   if (typeof p == "string") throw p;
-  if (s._error != null) return false;
   local off = int128.sub(h.value, p.rawMin);
   if (int128.cmp(off, p.rawRange) > 0) return s._fail(SerializeError.ValueOutOfRange);
   if (!s._room(p.numBits)) return false;
@@ -290,7 +287,6 @@ read.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
 measure.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
   local p = fixedPointParams128(integerBits, fractionBits, min, max);
   if (typeof p == "string") throw p;
-  if (s._error != null) return false;
   local off = int128.sub(h.value, p.rawMin);
   if (int128.cmp(off, p.rawRange) > 0) return s._fail(SerializeError.ValueOutOfRange);
   if (!s._room(p.numBits)) return false;

@@ -293,8 +293,8 @@ local runLengthValidation = function(serialize) {
   for (local i = 0; i < 8; i++) s8 += "a";
   local ws = serialize.WriteStream(blob(64));
   check(ws.serializeString({ value = s7 }, 8), "a 7 byte string must fit buffer size 8");
-  check(!ws.serializeString({ value = s8 }, 8), "an 8 byte string must not fit buffer size 8");
-  check(ws.error() == serialize.SerializeError.ValueOutOfRange, "the 8 byte refusal latched " + ws.error());
+  raises(function() { ws.serializeString({ value = s8 }, 8); }, "serialize: write misuse: ", "an 8 byte string in buffer size 8");
+  check(ws.error() == null, "the 8 byte trap latched " + ws.error());
 
   local top = serialize.WriteStream(blob(8));
   check(top.serializeString({ value = "" }, 0x7fffffff), "buffer size 2^31-1 must be accepted");
@@ -309,8 +309,8 @@ local runLengthValidation = function(serialize) {
 
 // runStrictWriter: the writer is handed well-formed UTF-8 with no zero byte, as
 // it is handed an int in its range (STANDARD.md, string); anything else is API
-// misuse and raises before any bit moves, on the write and the measure stream
-// and in every stream state (DESIGN.md (g)). Real text in every plane is
+// misuse and traps before any bit moves, on the write and the measure stream,
+// a full writer included (IMPLEMENTING.md U9; DESIGN.md (g)). Real text in every plane is
 // accepted. Reversed witness: the format 1.1 writer wrote every one of them.
 local runStrictWriter = function(serialize) {
   local nul = "serialize: a string must not contain a zero byte";
@@ -327,9 +327,9 @@ local runStrictWriter = function(serialize) {
   ];
   foreach (c in cases) {
     local h = { value = c.text };
-    local latched = serialize.WriteStream(blob(8));
-    latched._room(65);
-    foreach (stream in [serialize.WriteStream(blob(64)), serialize.MeasureStream(), latched]) {
+    local full = serialize.WriteStream(blob(8));
+    full.serializeBits64({ value = 0 }, 64);
+    foreach (stream in [serialize.WriteStream(blob(64)), serialize.MeasureStream(), full]) {
       local before = stream.bitsProcessed();
       raises(function() { stream.serializeString(h, 64); }, c.panic, "the writer handed " + c.what);
       check(stream.bitsProcessed() == before, c.what + ": the raising write moved the bit index");
@@ -384,12 +384,12 @@ local runMeasure = function(serialize) {
   check(ms.bitsProcessed() == 4 + 7 + 6 * 8,
     "measure string " + ms.bitsProcessed() + " bits, want " + (4 + 7 + 48));
 
-  // a value over the buffer latches ValueOutOfRange, exactly as Go's measure does
+  // a value over the buffer traps on a measure as on a write, latching
+  // nothing (IMPLEMENTING.md U6, U9)
   local long = { value = "0123456789abcdef" };
   local mf = serialize.MeasureStream();
-  check(!mf.serializeString(long, 16), "measure accepted a string that does not fit");
-  check(mf.error() == serialize.SerializeError.ValueOutOfRange,
-    "measure string refusal latched " + mf.error());
+  raises(function() { mf.serializeString(long, 16); }, "serialize: write misuse: ", "a measure of a string that does not fit");
+  check(mf.error() == null, "measure string trap latched " + mf.error());
 };
 
 local bitsRequiredValue = function(maxValue) {

@@ -47,7 +47,8 @@ local isNotFinite = function(x) {
 // which returns the text instead, so a read can refuse it (IMPLEMENTING.md
 // U7, U16).
 local PANIC_PARAMS = "serialize: compressed float requires min < max and resolution > 0";
-local paramsOrPanic = function(min, max, resolution) {
+local PANIC_PARAMS_FINITE = "serialize: compressed float declaration has a max - min or (max - min) / resolution that is not finite in float32";
+local paramsOrPanic = function(min, max, resolution, strict = false) {
   // the parameters are float32, as Go's are: rounded on entry (DESIGN.md (e))
   min = fround(min);
   max = fround(max);
@@ -55,13 +56,23 @@ local paramsOrPanic = function(min, max, resolution) {
   if (!(min < max) || !(resolution > 0)) return PANIC_PARAMS;
   local delta = fround(max - min);
   local values = fround(delta / resolution);
+  // a declaration whose delta, or whose delta / resolution, is not finite in
+  // float32 is non-conforming (STANDARD.md compressed_float; the reference's
+  // serialize_compressed_float_params asserts both): write misuse, never
+  // clamped (IMPLEMENTING.md U9). The test is on the bits: Squirrel's float
+  // comparison is not IEEE's (NaN > 0 is true on the pin), so a NaN
+  // resolution passes the guard above and is caught here as a NaN values.
+  // Only the trapping entry (compressedFloatParams: write, measure and the
+  // public helper) makes it; the read arm keeps the clamp it always had, so
+  // the read path is unchanged.
+  if (strict && (isNotFinite(delta) || isNotFinite(values))) return PANIC_PARAMS_FINITE;
   if (!(values >= 1.0)) values = 1.0;
   else if (values > 4294967040.0) values = 4294967040.0;
   local maxIntegerValue = ceil(values).tointeger();
   return { maxIntegerValue = maxIntegerValue, bits = bitLen(maxIntegerValue), delta = delta };
 };
 local compressedFloatParams = function(min, max, resolution) {
-  local p = paramsOrPanic(min, max, resolution);
+  local p = paramsOrPanic(min, max, resolution, true);
   if (typeof p == "string") throw p;
   return p;
 };
@@ -88,11 +99,10 @@ local validateConstants = function(maxIntegerValue, bits, delta) {
 // checkTopDecode(delta, min): the declaration's top integer decodes to
 // min + delta, rounded once in float32, and a declaration whose top decode is
 // not finite is non-conforming as a whole (STANDARD.md compressed_float, "The
-// decode must be finite"), so a write raises serialize.go v2's panic text on
-// it, even for a value that would decode finite. The measure raises too, a
-// deliberate deviation (serialize.go's measure does not check): it raises on
-// misuse like the writer (DESIGN.md (g)). A reader refuses the non-finite
-// decode itself.
+// decode must be finite"), so a write traps on it, even for a value that
+// would decode finite. The measure traps too: it makes every check a write
+// makes (IMPLEMENTING.md U6, U9; DESIGN.md (g)). A reader refuses the
+// non-finite decode itself.
 local checkTopDecode = function(delta, min) {
   if (isNotFinite(fround(fround(min) + delta))) {
     throw "serialize: compressed float declaration decodes its top integer to a value that is not finite";

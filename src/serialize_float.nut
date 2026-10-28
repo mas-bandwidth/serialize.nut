@@ -9,8 +9,8 @@
 // both carry FINITE values. A pattern whose exponent field is all ones (NaN
 // with any payload, either sign, and both infinities) is refused on read as
 // non_finite_float, tested on the RAW BITS before the holder is written, and
-// a write of one latches NonFiniteFloat and writes nothing (serialize.go v2
-// SerializeFloat32 / SerializeFloat64). Every finite pattern, negative zero
+// a write or a measure of one is write misuse: it traps and writes nothing
+// (IMPLEMENTING.md U6, U9). Every finite pattern, negative zero
 // and the subnormals included, travels bit for bit.
 //
 // fround(x) (DESIGN.md (e)) narrows a double to the float32 Go's float32()
@@ -130,10 +130,9 @@ _M.floatBitsAreFinite <- floatBitsAreFinite;
 // before any bit moves; a read assigns the holder only after every move.
 local write = {
   // serializeFloat(s, h): fround(h.value) as a 32-bit group (STANDARD.md
-  // float); a non-finite pattern after the narrowing latches NonFiniteFloat
-  // before any bit moves, as serialize.go v2 checks it before the buffer
+  // float); a non-finite pattern after the narrowing traps before any bit
+  // moves (IMPLEMENTING.md U9)
   serializeFloat = function(s, h) {
-    if (!s.ok()) return false;
     local p = froundPattern(h.value);
     if (!floatBitsAreFinite(p)) return s._fail(SerializeError.NonFiniteFloat);
     if (!s._room(32)) return false;
@@ -143,7 +142,6 @@ local write = {
   // serializeDouble(s, h): the 64 bits, the low 32-bit group first
   // (STANDARD.md double); finite only, as serializeFloat
   serializeDouble = function(s, h) {
-    if (!s.ok()) return false;
     local bits = castf2i(h.value);
     if (!doubleBitsAreFinite(bits)) return s._fail(SerializeError.NonFiniteFloat);
     if (!s._room(64)) return false;
@@ -177,17 +175,14 @@ local read = {
 };
 
 // the measure stream charges the exact width; like a write it is handed
-// finite values only, and latches NonFiniteFloat on any other (serialize.go v2
-// MeasureStream.SerializeFloat32 / SerializeFloat64)
+// finite values only, and traps on any other (IMPLEMENTING.md U6, U9)
 local measure = {
   serializeFloat = function(s, h) {
-    if (!s.ok()) return false;
     if (!floatBitsAreFinite(froundPattern(h.value))) return s._fail(SerializeError.NonFiniteFloat);
     s._put(0, 32);
     return true;
   },
   serializeDouble = function(s, h) {
-    if (!s.ok()) return false;
     if (!doubleBitsAreFinite(castf2i(h.value))) return s._fail(SerializeError.NonFiniteFloat);
     s._put(0, 64);
     return true;

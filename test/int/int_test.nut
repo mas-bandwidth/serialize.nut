@@ -4,11 +4,22 @@
 // consumed, canonical bytes, refusal with destination untouched and the stream
 // terminal), prints the record count per file and fails unless it equals the
 // file's count; plus serialize.go's TestBitsRequired, TestBitsRequired64 and
-// TestSerializeInt64FullRange edge cases, and the writer's ValueOutOfRange
-// latch for a value one past each bound. A test throws to fail.
+// TestSerializeInt64FullRange edge cases, and the writer's trap (U9) on
+// a value one past each bound. A test throws to fail.
 
 local check = function(cond, what) {
   if (!cond) throw "TestSerializeInt: " + what;
+};
+
+// traps(fn, what): fn() throws the library's write-misuse trap
+// (IMPLEMENTING.md U9; DESIGN.md (g)). fn is called directly, never through
+// .call or acall: sq prints a throw that crosses a native call to stderr even
+// when it is caught (DESIGN.md (i)).
+local traps = function(fn, what) {
+  local got = null;
+  try { fn(); } catch (e) { got = e; }
+  check(got != null, what + ": did not trap");
+  check(typeof got == "string" && got.len() >= 25 && got.slice(0, 25) == "serialize: write misuse: ", what + ": trapped with " + got);
 };
 
 local MIN64 = 0x8000000000000000;
@@ -338,25 +349,20 @@ function TestSerializeInt() {
   check(rs.serializeInt64(rh, -100, 100) == true, "read int64 narrow 55");
   check(rh.value == 55, "int64 narrow round trip " + rh.value);
 
-  // the writer's ValueOutOfRange latch for a value one past each bound
-  // (DESIGN.md (g)): the refusal latches and sticks
+  // a value one past each bound is write misuse: it traps, latching nothing,
+  // and a later write in range still writes (IMPLEMENTING.md U9; DESIGN.md (g))
   local wsA = serialize.WriteStream(blob(8));
-  check(wsA.serializeInt({ value = 2147483648 }, -2147483648, 2147483647) == false, "int max+1 not refused");
-  check(wsA.error() == serialize.SerializeError.ValueOutOfRange, "int max+1 latched " + wsA.error());
-  check(wsA.serializeInt({ value = 0 }, -2147483648, 2147483647) == false, "int latch is not sticky");
+  traps(function() { wsA.serializeInt({ value = 2147483648 }, -2147483648, 2147483647); }, "int max+1");
+  check(wsA.error() == null && wsA.serializeInt({ value = 0 }, -2147483648, 2147483647) && wsA.bitsProcessed() == 32, "int max+1 latched");
   local wsB = serialize.WriteStream(blob(8));
-  check(wsB.serializeInt({ value = -2147483649 }, -2147483648, 2147483647) == false, "int min-1 not refused");
-  check(wsB.error() == serialize.SerializeError.ValueOutOfRange, "int min-1 latched " + wsB.error());
+  traps(function() { wsB.serializeInt({ value = -2147483649 }, -2147483648, 2147483647); }, "int min-1");
   local wsC = serialize.WriteStream(blob(8));
-  check(wsC.serializeInt64({ value = 101 }, -100, 100) == false, "int64 max+1 not refused");
-  check(wsC.error() == serialize.SerializeError.ValueOutOfRange, "int64 max+1 latched " + wsC.error());
+  traps(function() { wsC.serializeInt64({ value = 101 }, -100, 100); }, "int64 max+1");
   local wsD = serialize.WriteStream(blob(8));
-  check(wsD.serializeInt64({ value = -101 }, -100, 100) == false, "int64 min-1 not refused");
-  check(wsD.error() == serialize.SerializeError.ValueOutOfRange, "int64 min-1 latched " + wsD.error());
+  traps(function() { wsD.serializeInt64({ value = -101 }, -100, 100); }, "int64 min-1");
   local wsE = serialize.WriteStream(blob(16));
-  check(wsE.serializeInt128({ value = [101, 0] }, [0, 0], [100, 0]) == false, "int128 max+1 not refused");
-  check(wsE.error() == serialize.SerializeError.ValueOutOfRange, "int128 max+1 latched " + wsE.error());
+  traps(function() { wsE.serializeInt128({ value = [101, 0] }, [0, 0], [100, 0]); }, "int128 max+1");
   local wsF = serialize.WriteStream(blob(16));
-  check(wsF.serializeInt128({ value = [-1, 0xFFFFFFFFFFFFFFFF] }, [0, 0], [100, 0]) == false, "int128 min-1 not refused");
-  check(wsF.error() == serialize.SerializeError.ValueOutOfRange, "int128 min-1 latched " + wsF.error());
+  traps(function() { wsF.serializeInt128({ value = [-1, 0xFFFFFFFFFFFFFFFF] }, [0, 0], [100, 0]); }, "int128 min-1");
+  foreach (s in [wsB, wsC, wsD, wsE, wsF]) check(s.error() == null && s.bitsProcessed() == 0, "a trapped int write latched or wrote");
 }

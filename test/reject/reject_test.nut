@@ -11,8 +11,9 @@
 //   (4) serializeObject latches Rejected when the object fails with nothing
 //       latched, keeps a primitive's reason when one refused inside it, and
 //       accepts an object that returns true;
-//   (5) reject is read only: on a write or a measure it answers false and
-//       latches nothing (U9).
+//   (5) reject is read only: on a write or a measure it is caller misuse and
+//       traps, latching nothing (U9, 2.1.1: this port has no unchecked
+//       build, so it traps in every run).
 //
 // Reversed witnesses: the 2.0 port had no reject() at all, and its object
 // latched value_out_of_range for the caller's refusal. A test passes by
@@ -66,10 +67,15 @@ function TestReject() {
   local ra = serialize.ReadStream(bytesOf([ 0x05 ]));
   check(ra.serializeObject(accepting) && ra.ok(), "an accepting object refused as " + ra.error());
 
-  // (5) read only
+  // (5) read only: a reject on a write or a measure traps (U9)
+  local trapped = function(s) {
+    local got = null;
+    try { s.reject(); } catch (e) { got = e; }
+    return typeof got == "string" && got.find("serialize: write misuse: ") == 0;
+  };
   local ws = serialize.WriteStream(blob(8));
-  check(ws.reject() == false && ws.ok(), "reject() on a write stream latched " + ws.error());
+  check(trapped(ws) && ws.ok(), "reject() on a write stream did not trap, or latched " + ws.error());
   check(ws.serializeBits({ value = 1 }, 4), "the write stream refused after a reject");
   local ms = serialize.MeasureStream();
-  check(ms.reject() == false && ms.ok(), "reject() on a measure stream latched " + ms.error());
+  check(trapped(ms) && ms.ok(), "reject() on a measure stream did not trap, or latched " + ms.error());
 }

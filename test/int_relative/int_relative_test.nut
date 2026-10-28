@@ -229,12 +229,13 @@ function TestSerializeIntRelative() {
     check(!below.ok && below.error == serialize.SerializeError.ValueOutOfRange, "a current below previous was refused as " + below.error);
   }
 
-  // a current past the domain is out of range on write and measure: a 64-bit
-  // SQInteger holds it, and its 32 bits would be refused by the reader.
+  // a current past the domain is write misuse on write and measure: a 64-bit
+  // SQInteger holds it, and its 32 bits would be refused by the reader. It
+  // traps and latches nothing (IMPLEMENTING.md U6, U9).
   // Reversed witness: the format 1.1 writer wrote 0x80000000.
   foreach (stream in [serialize.WriteStream(blob(8)), serialize.MeasureStream()]) {
-    check(stream.serializeIntRelative(100, { value = 0x80000000 }) == false &&
-      stream.error() == serialize.SerializeError.ValueOutOfRange && stream.bitsProcessed() == 0,
+    raises(function() { stream.serializeIntRelative(100, { value = 0x80000000 }); }, "serialize: write misuse: ", "a current past the domain");
+    check(stream.error() == null && stream.bitsProcessed() == 0,
       "a current past the domain latched " + stream.error() + " after " + stream.bitsProcessed() + " bits");
   }
 
