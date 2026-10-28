@@ -33,10 +33,11 @@ local PANIC_STRING_UTF8 = "serialize: a string must be well-formed UTF-8";
 // validateBufferSize(bufferSize): serialize.go's validateBufferSize, the
 // panic text verbatim (serialize.go panicBufferSize). API misuse raises in
 // every stream state (DESIGN.md (g)).
+local bufferSizeIsValid = function(bufferSize) {
+  return typeof bufferSize == "integer" && bufferSize >= 1 && bufferSize <= 0x7fffffff;
+};
 local validateBufferSize = function(bufferSize) {
-  if (typeof bufferSize != "integer" || bufferSize < 1 || bufferSize > 0x7fffffff) {
-    throw PANIC_BUFFER_SIZE;
-  }
+  if (!bufferSizeIsValid(bufferSize)) throw PANIC_BUFFER_SIZE;
 };
 
 local isBlob = function(b) {
@@ -49,13 +50,6 @@ local writeString = function(h) {
     throw "serialize: the string holder must be a table { value = <string> }";
   }
   return h.value;
-};
-
-// checkReadHolder(h): a read holder is a table with a value field to assign.
-local checkReadHolder = function(h) {
-  if (typeof h != "table" || !("value" in h)) {
-    throw "serialize: the string holder must be a table { value = ... }";
-  }
 };
 
 // rangeBits(min, max): serialize.go BitsRequired, the width of the unsigned
@@ -187,23 +181,25 @@ local utf8Valid = function(b) {
 // putBytes(s, data): bytes on write and measure. alignBits() is the write's
 // actual padding and the measure's worst case 7 (STANDARD.md, bytes; The
 // Measure Stream). count zero still aligns.
+// The room for the whole operation, align and payload, is checked before the
+// first bit moves (IMPLEMENTING.md U10): no align bits ahead of a payload that
+// does not fit.
 local putBytes = function(s, data) {
   if (!isBlob(data)) throw PANIC_NOT_BLOB;
   local align = s.alignBits();
-  if (align > 0) {
-    if (!s._room(align)) return false;
-    s._put(0, align);
-  }
   local n = data.len();
-  if (!s._room(8 * n)) return false;
+  if (!s._room(align + 8 * n)) return false;
+  if (align > 0) s._put(0, align);
   if (n > 0) s._putBytes(data, 0, n);
   return true;
 };
 
 // readBytes(s, data): aligns (verifying zero padding), bounds-checks the whole
 // count, then fills the caller's blob (STANDARD.md, bytes; Reader Obligations).
+// A destination that is not a blob is a bad declaration on read: it refuses
+// ValueOutOfRange after the failure state, never a raise (IMPLEMENTING.md U7).
 local readBytes = function(s, data) {
-  if (!isBlob(data)) throw PANIC_NOT_BLOB;
+  if (!isBlob(data)) return s._fail(E.ValueOutOfRange);
   local align = s.alignBits();
   if (align > 0) {
     if (!s._room(align)) return false;
@@ -231,13 +227,15 @@ local putString = function(s, h, bufferSize) {
   if (s.error() != null) return false;
   local length = value.len();
   if (length >= bufferSize) return s._fail(E.ValueOutOfRange);
+  // the whole operation's room first, the length field, the align after it
+  // and the payload, so nothing is written ahead of a payload that does not
+  // fit (IMPLEMENTING.md U10); a measure's room is unbounded
+  local lengthBits = rangeBits(0, bufferSize - 1);
+  local align = (8 - (s.bitsProcessed() + lengthBits) % 8) % 8;
+  if (!s._room(lengthBits + align + 8 * length)) return false;
   if (!writeRange(s, length, 0, bufferSize - 1)) return false;
-  local align = s.alignBits();
-  if (align > 0) {
-    if (!s._room(align)) return false;
-    s._put(0, align);
-  }
-  if (!s._room(8 * length)) return false;
+  align = s.alignBits();
+  if (align > 0) s._put(0, align);
   if (length > 0) s._putBytes(bytes, 0, length);
   return true;
 };
@@ -245,10 +243,13 @@ local putString = function(s, h, bufferSize) {
 // readString(s, h, bufferSize): the length prefix, the align, the whole length
 // bounds check, the copy, and only then the NUL and UTF-8 refusals, so the
 // holder is untouched on failure (STANDARD.md, string; Reader Obligations).
+// A buffer size outside [1, 2^31) or a holder that is not a table with a
+// value field is a bad declaration on read: it refuses ValueOutOfRange after
+// the failure state, before any bit moves, never a raise (IMPLEMENTING.md U7,
+// U16).
 local readString = function(s, h, bufferSize) {
-  validateBufferSize(bufferSize);
-  checkReadHolder(h);
   if (s.error() != null) return false;
+  if (!bufferSizeIsValid(bufferSize) || typeof h != "table" || !("value" in h)) return s._fail(E.ValueOutOfRange);
   local r = readRange(s, 0, bufferSize - 1);
   if (!r.ok) return false;
   local length = r.value;

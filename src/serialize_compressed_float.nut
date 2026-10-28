@@ -43,15 +43,16 @@ local isNotFinite = function(x) {
 // compressedFloatParams(min, max, resolution) (serialize.go CompressedFloatParams):
 // derive the wire constants. Returns { maxIntegerValue, bits, delta }. Every
 // float32 step rounds (DESIGN.md (e)). min >= max or resolution <= 0 is API
-// misuse and raises serialize.go's panic text.
-local compressedFloatParams = function(min, max, resolution) {
+// misuse and raises serialize.go's panic text; the arms reach paramsOrPanic,
+// which returns the text instead, so a read can refuse it (IMPLEMENTING.md
+// U7, U16).
+local PANIC_PARAMS = "serialize: compressed float requires min < max and resolution > 0";
+local paramsOrPanic = function(min, max, resolution) {
   // the parameters are float32, as Go's are: rounded on entry (DESIGN.md (e))
   min = fround(min);
   max = fround(max);
   resolution = fround(resolution);
-  if (!(min < max) || !(resolution > 0)) {
-    throw "serialize: compressed float requires min < max and resolution > 0";
-  }
+  if (!(min < max) || !(resolution > 0)) return PANIC_PARAMS;
   local delta = fround(max - min);
   local values = fround(delta / resolution);
   if (!(values >= 1.0)) values = 1.0;
@@ -59,12 +60,27 @@ local compressedFloatParams = function(min, max, resolution) {
   local maxIntegerValue = ceil(values).tointeger();
   return { maxIntegerValue = maxIntegerValue, bits = bitLen(maxIntegerValue), delta = delta };
 };
+local compressedFloatParams = function(min, max, resolution) {
+  local p = paramsOrPanic(min, max, resolution);
+  if (typeof p == "string") throw p;
+  return p;
+};
 
-// validateConstants(maxIntegerValue, bits, delta): API misuse raises serialize.go's
-// panic text (serialize.go validateCompressedFloatConstants). The delta-delta
-// term catches a non-finite delta; !(delta > 0) catches NaN, zero and negative.
+// constantsAreValid(maxIntegerValue, bits, delta): the precomputed constants
+// are what CompressedFloatParams can derive (serialize.go
+// validateCompressedFloatConstants; IMPLEMENTING.md U16): maxIntegerValue an
+// integer in [1, 4294967040], bits exactly its bit length, and delta a
+// positive finite number. The delta-delta term catches a non-finite delta;
+// !(delta > 0) catches NaN, zero and negative. Write and measure raise
+// serialize.go's panic text on a false (validateConstants); a read refuses it
+// as ValueOutOfRange (U7).
+local constantsAreValid = function(maxIntegerValue, bits, delta) {
+  return typeof maxIntegerValue == "integer" && maxIntegerValue >= 1 && maxIntegerValue <= 4294967040 &&
+    typeof bits == "integer" && bits == bitLen(maxIntegerValue) &&
+    (typeof delta == "float" || typeof delta == "integer") && delta > 0 && delta - delta == 0;
+};
 local validateConstants = function(maxIntegerValue, bits, delta) {
-  if (maxIntegerValue == 0 || bits != bitLen(maxIntegerValue) || !(delta > 0) || delta - delta != 0) {
+  if (!constantsAreValid(maxIntegerValue, bits, delta)) {
     throw "serialize: precomputed compressed float constants must be exactly what CompressedFloatParams derives";
   }
 };
@@ -109,7 +125,7 @@ local writePrecomputed = function(s, h, maxIntegerValue, bits, delta, min) {
 
 // the read arm's audited home (serialize.go compressedFloat32Precomputed)
 local readPrecomputed = function(s, h, maxIntegerValue, bits, delta, min) {
-  validateConstants(maxIntegerValue, bits, delta);
+  if (!constantsAreValid(maxIntegerValue, bits, delta)) return s._fail(SerializeError.ValueOutOfRange);
   min = fround(min);
   if (!s._room(bits)) return false;
   local integerValue = s._take(bits);
@@ -139,7 +155,8 @@ local write = {
 
 local read = {
   serializeCompressedFloat = function(s, h, min, max, resolution) {
-    local p = compressedFloatParams(min, max, resolution);
+    local p = paramsOrPanic(min, max, resolution);
+    if (typeof p == "string") return s._fail(SerializeError.ValueOutOfRange);
     return readPrecomputed(s, h, p.maxIntegerValue, p.bits, p.delta, min);
   },
   serializeCompressedFloatPrecomputed = function(s, h, maxIntegerValue, bits, delta, min) {

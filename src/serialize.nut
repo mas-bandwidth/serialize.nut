@@ -108,6 +108,25 @@ local api = {
   // serialize.go v2's Refusal); None is a healthy stream
   SerializeError = streams.SerializeError,
 
+  // the family spelling of a reason, "none" for no refusal (IMPLEMENTING.md
+  // U14; the reference's serialize::refusal_name)
+  refusalName = streams.refusalName,
+
+  // copyString(source, destSize): the reference's serialize_copy_string in
+  // Squirrel's idiom (IMPLEMENTING.md U15): a string is a value, so the copy
+  // is returned rather than written into a destination; it holds at most
+  // destSize - 1 bytes of source and stops at the first zero byte. destSize
+  // below 1 raises (the reference asserts it).
+  copyString = function(source, destSize) {
+    if (typeof source != "string") throw "serialize: copyString copies a string";
+    if (typeof destSize != "integer" || destSize < 1) throw "serialize: copyString requires destSize >= 1";
+    local n = source.len() < destSize - 1 ? source.len() : destSize - 1;
+    for (local i = 0; i < n; i++) {
+      if (source[i] == 0) { n = i; break; }
+    }
+    return source.slice(0, n);
+  },
+
   // the three streams (DESIGN.md (g)); serialize_stream.nut
   WriteStream = streams.WriteStream,
   ReadStream = streams.ReadStream,

@@ -33,6 +33,23 @@ local SerializeError = {
 };
 _M.SerializeError <- SerializeError;
 
+// REASONS: the closed list as a set of its spellings, for fail(reason) and
+// refusalName (IMPLEMENTING.md U14)
+local REASONS = {};
+foreach (k, v in SerializeError) if (v != null) REASONS[v] <- true;
+
+// refusalName(reason): the family spelling of a refusal reason, "none" for no
+// refusal (SerializeError.None, null), and "unknown" for anything outside the
+// closed list, as the reference's serialize::refusal_name (IMPLEMENTING.md
+// U14). A stream's error() already returns the spelling; this names a reason
+// held anywhere, null included.
+local refusalName = function(reason) {
+  if (reason == null) return "none";
+  if (typeof reason == "string" && reason in REASONS) return reason;
+  return "unknown";
+};
+_M.refusalName <- refusalName;
+
 // the family of every serialize method (DESIGN.md (h)): the method's arm lives
 // in src/serialize_<family>.nut as <module>.write / .read / .measure [method]
 local FAMILY = {
@@ -138,9 +155,11 @@ class Stream {
   function serializeString(h, bufferSize) { return _arm("bytes", "serializeString")(this, h, bufferSize); }
 
   // serializeEnd(): the end of the top-level object (STANDARD.md end). On a
-  // write or a measure it emits nothing and costs nothing; a failed stream
-  // still answers false. ReadStream overrides it with the reader's end.
-  function serializeEnd() { return _error == null; }
+  // write or a measure it is a no-op returning true, emitting and costing
+  // nothing, whatever the stream's state (IMPLEMENTING.md U12; the stream's
+  // error() and flush still tell a failed write). ReadStream overrides it with
+  // the reader's end.
+  function serializeEnd() { return true; }
 
   // serializeObject(object): object.serialize(stream) inline, no bytes of its
   // own (STANDARD.md object). A latched stream does not call it. Anything but
@@ -159,6 +178,11 @@ class Stream {
   // there is nothing to refuse, so it answers false and latches nothing (U9).
   // ReadStream overrides it. Always false.
   function reject() { return false; }
+
+  // fail(reason): a refusal decided outside the stream (IMPLEMENTING.md U14).
+  // Read only, like reject: on a write or a measure it answers false and
+  // latches nothing, and never raises (U6, U9). ReadStream overrides it.
+  function fail(reason = null) { return false; }
 }
 
 // WriteStream(buffer): writes into buffer, a blob whose length is a multiple
@@ -272,6 +296,15 @@ class ReadStream extends Stream {
   // reject(): latch Rejected through the same latch as a wire refusal, so the
   // first reason wins and the stream is terminal from here on; always false
   function reject() { return _fail(SerializeError.Rejected); }
+
+  // fail(reason): latch reason through the same latch, so the first reason
+  // wins; no reason, or anything outside the closed list, latches Rejected,
+  // never none (a refused stream that reported none would be relabelled by
+  // the next read) and never a raise (IMPLEMENTING.md U14, U7). Always false.
+  function fail(reason = null) {
+    if (typeof reason == "string" && reason in REASONS) return _fail(reason);
+    return _fail(SerializeError.Rejected);
+  }
 
   // _take(bits): one group of bits in [1,32], after _room
   function _take(bits) {

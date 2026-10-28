@@ -171,9 +171,10 @@ function TestSmoke() {
     function() { return mf.serializeUint64({ value = 1 }); },
     function() { return mf.serializeAlign(); },
     function() { return mf.serializeCompressedFloat({ value = 1.0 }, 0.0, 10.0, 0.01); },
-    function() { return mf.serializeEnd(); },
   ];
   foreach (i, call in mcalls) check(call() == false, "measure call " + i + " succeeded on a failed measure stream");
+  // end on a measure is a no-op returning true, whatever its state (U12)
+  check(mf.serializeEnd() == true, "the failed measure's end answered false; end on a measure is a no-op returning true (U12)");
   check(mf.bitsProcessed() == 0 && mf.error() == serialize.SerializeError.NonFiniteFloat,
     "the failed measure charged " + mf.bitsProcessed() + " bits, reason " + mf.error());
   raises(function() { serialize.WriteStream(blob(12)); }, "serialize: bit writer buffer size must be a multiple of 8 bytes", "a 12-byte buffer");

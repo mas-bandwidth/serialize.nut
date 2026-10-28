@@ -22,6 +22,28 @@ local Err = require("serialize_stream").SerializeError;
 local PANIC_BITS_RANGE = "serialize: bits must be in [1,32]";
 local PANIC_BITS_RANGE64 = "serialize: bits must be in [1,64]";
 
+// badBits(bits, top): the bit count is not an integer in [1, top], a bad
+// declaration on every stream (IMPLEMENTING.md U16): write and measure raise,
+// read refuses ValueOutOfRange (U7)
+local badBits = function(bits, top) {
+  return typeof bits != "integer" || bits < 1 || bits > top;
+};
+
+// overWide(s, v, bits): U8, a write of a value that does not fit its width.
+// The port has no unchecked build, so the write catches it rather than mask
+// it, by the ranged ints' mechanism: it latches ValueOutOfRange and writes
+// nothing (DESIGN.md (g)). A bits width below 64 holds exactly the values
+// whose unsigned reading has no bit at or above bits; a 64-bit width holds
+// every SQInteger.
+local overWide = function(s, v, bits) {
+  if (s._error != null) return true;
+  if (typeof v != "integer" || (bits < 64 && (v >>> bits) != 0)) {
+    s._fail(Err.ValueOutOfRange);
+    return true;
+  }
+  return false;
+};
+
 // mask32(k): the low k bits as a mask, k in [1,32] (k == 32 is a full dword,
 // where 1 << 32 would overflow).
 local mask32 = function(k) { return k == 32 ? 0xffffffff : (1 << k) - 1; };
@@ -89,11 +111,12 @@ local write = {};
 local read = {};
 local measure = {};
 
-// serializeBits: bits in [1,32], the low bits of the value (STANDARD.md, bits;
-// serialize.go panicBitsRange). Bits above the width are masked, as serialize.go
-// masks them.
+// serializeBits: bits in [1,32], the value (STANDARD.md, bits; serialize.go
+// panicBitsRange). A value that does not fit the width is caught, never masked
+// (IMPLEMENTING.md U8).
 write.serializeBits <- function(s, h, bits) {
-  if (bits < 1 || bits > 32) throw PANIC_BITS_RANGE;
+  if (badBits(bits, 32)) throw PANIC_BITS_RANGE;
+  if (overWide(s, h.value, bits)) return false;
   if (!s._room(bits)) return false;
   s._put(h.value & mask32(bits), bits);
   return true;
@@ -103,7 +126,8 @@ write.serializeBits <- function(s, h, bits) {
 // first, then the remaining bits - 32 high bits (STANDARD.md, bits; DESIGN.md
 // (b); serialize.go SerializeBits64).
 write.serializeBits64 <- function(s, h, bits) {
-  if (bits < 1 || bits > 64) throw PANIC_BITS_RANGE64;
+  if (badBits(bits, 64)) throw PANIC_BITS_RANGE64;
+  if (overWide(s, h.value, bits)) return false;
   if (!s._room(bits)) return false;
   if (bits <= 32) {
     s._put(h.value & mask32(bits), bits);
@@ -124,16 +148,19 @@ write.serializeBool <- function(s, h) {
 // the fixed-width unsigned helpers are aliases for serializeBits at that width
 // (STANDARD.md, bits: the fixed-width helpers carry no range information).
 write.serializeUint8 <- function(s, h) {
+  if (overWide(s, h.value, 8)) return false;
   if (!s._room(8)) return false;
   s._put(h.value & 0xff, 8);
   return true;
 }
 write.serializeUint16 <- function(s, h) {
+  if (overWide(s, h.value, 16)) return false;
   if (!s._room(16)) return false;
   s._put(h.value & 0xffff, 16);
   return true;
 }
 write.serializeUint32 <- function(s, h) {
+  if (overWide(s, h.value, 32)) return false;
   if (!s._room(32)) return false;
   s._put(h.value & 0xffffffff, 32);
   return true;
@@ -157,15 +184,17 @@ write.serializeAlign <- function(s) {
   return true;
 }
 
+// a bad bit count on read refuses ValueOutOfRange after the failure state,
+// never a raise (IMPLEMENTING.md U7, U16)
 read.serializeBits <- function(s, h, bits) {
-  if (bits < 1 || bits > 32) throw PANIC_BITS_RANGE;
+  if (badBits(bits, 32)) return s._fail(Err.ValueOutOfRange);
   if (!s._room(bits)) return false;
   h.value = s._take(bits);
   return true;
 }
 
 read.serializeBits64 <- function(s, h, bits) {
-  if (bits < 1 || bits > 64) throw PANIC_BITS_RANGE64;
+  if (badBits(bits, 64)) return s._fail(Err.ValueOutOfRange);
   if (!s._room(bits)) return false;
   if (bits <= 32) {
     h.value = s._take(bits);
@@ -214,13 +243,13 @@ read.serializeAlign <- function(s) {
 // The Measure Stream); align charges the worst case of 7 bits, which
 // MeasureStream.alignBits() returns (DESIGN.md (g)).
 measure.serializeBits <- function(s, h, bits) {
-  if (bits < 1 || bits > 32) throw PANIC_BITS_RANGE;
+  if (badBits(bits, 32)) throw PANIC_BITS_RANGE;
   if (!s._room(bits)) return false;
   s._put(0, bits);
   return true;
 }
 measure.serializeBits64 <- function(s, h, bits) {
-  if (bits < 1 || bits > 64) throw PANIC_BITS_RANGE64;
+  if (badBits(bits, 64)) throw PANIC_BITS_RANGE64;
   if (!s._room(bits)) return false;
   s._put(0, bits);
   return true;

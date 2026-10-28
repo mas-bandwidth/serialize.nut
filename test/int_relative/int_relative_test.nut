@@ -243,9 +243,15 @@ function TestSerializeIntRelative() {
     local v = { value = 5 };
     raises(function() { serialize.WriteStream(blob(8)).serializeIntRelative(-1, v); },
       "serialize: int relative previous must be in [0,2147483647]", "write previous outside the domain");
-    local h = { value = 0 };
-    raises(function() { serialize.ReadStream(blob(8)).serializeIntRelative(-1, h); },
-      "serialize: int relative previous must be in [0,2147483647]", "read previous outside the domain");
+    // on read a previous outside the domain refuses ValueOutOfRange, the
+    // holder untouched, never a raise (IMPLEMENTING.md U7, U16; reversed
+    // witness: the 2.1.0 port raised)
+    foreach (prev in [ -1, 0x80000000 ]) {
+      local h = { value = 0 };
+      local rs = serialize.ReadStream(blob(8));
+      check(rs.serializeIntRelative(prev, h) == false && rs.error() == "value_out_of_range" && h.value == 0 && rs.bitsProcessed() == 0,
+        "read previous " + prev + " outside the domain did not refuse value_out_of_range untouched");
+    }
     raises(function() { serialize.MeasureStream().serializeIntRelative(-1, v); },
       "serialize: int relative previous must be in [0,2147483647]", "measure previous outside the domain");
   }

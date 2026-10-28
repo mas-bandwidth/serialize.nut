@@ -195,9 +195,11 @@ write.serializeInt128 <- function(s, h, min, max) {
   return true;
 };
 
+// a bad declaration (min > max) refuses ValueOutOfRange on read, never a
+// raise (IMPLEMENTING.md U7, U16)
 read.serializeInt128 <- function(s, h, min, max) {
-  if (i128cmp(min, max) > 0) throw PANIC_MINMAX;
   if (s._error != null) return false;
+  if (i128cmp(min, max) > 0) return s._fail(SerializeError.ValueOutOfRange);
   local numBits = u128len(u128sub(max, min));
   if (numBits == 0) { h.value = [min[0], min[1]]; return true; }
   if (!s._room(numBits)) return false;

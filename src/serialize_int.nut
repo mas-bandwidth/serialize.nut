@@ -18,6 +18,9 @@ local int128 = require("serialize_int128");
 local SerializeError = streams.SerializeError;
 
 local PANIC_MINMAX = "serialize: min must not be greater than max";
+local PANIC_INT32 = "serialize: int bounds must be in [-2147483648, 2147483647]";
+local INT32_MIN = -0x80000000;
+local INT32_MAX = 0x7FFFFFFF;
 local MIN64 = 0x8000000000000000;
 local MAX64 = 0x7FFFFFFFFFFFFFFF;
 
@@ -77,6 +80,7 @@ local measure = {};
 // the value is the range (STANDARD.md int). A value outside [min,max] latches
 // ValueOutOfRange and writes nothing (DESIGN.md (g)).
 write.serializeInt <- function(s, h, min, max) {
+  if (min < INT32_MIN || max > INT32_MAX) throw PANIC_INT32;
   if (min > max) throw PANIC_MINMAX;
   if (s._error != null) return false;
   local v = h.value;
@@ -88,9 +92,13 @@ write.serializeInt <- function(s, h, min, max) {
   return true;
 };
 
+// A bad declaration on read (bounds outside int32, or min > max) is never a
+// raise: it refuses ValueOutOfRange before any bit moves, after the failure
+// state, so a failed stream keeps its first reason (IMPLEMENTING.md U5, U7,
+// U16).
 read.serializeInt <- function(s, h, min, max) {
-  if (min > max) throw PANIC_MINMAX;
   if (s._error != null) return false;
+  if (min < INT32_MIN || max > INT32_MAX || min > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired32(min, max);
   if (bits == 0) { h.value = min; return true; }
   if (!s._room(bits)) return false;
@@ -104,6 +112,7 @@ read.serializeInt <- function(s, h, min, max) {
 };
 
 measure.serializeInt <- function(s, h, min, max) {
+  if (min < INT32_MIN || max > INT32_MAX) throw PANIC_INT32;
   if (min > max) throw PANIC_MINMAX;
   if (s._error != null) return false;
   local v = h.value;
@@ -137,8 +146,8 @@ write.serializeInt64 <- function(s, h, min, max) {
 };
 
 read.serializeInt64 <- function(s, h, min, max) {
-  if (min > max) throw PANIC_MINMAX;
   if (s._error != null) return false;
+  if (min > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired64(min, max);
   if (bits == 0) { h.value = min; return true; }
   if (!s._room(bits)) return false;

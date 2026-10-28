@@ -90,9 +90,12 @@ write.serializeIntRelative <- function(s, previous, h) {
 };
 
 local read = {};
+// a previous outside the domain on read is a bad declaration: it refuses
+// ValueOutOfRange after the failure state, never a raise (IMPLEMENTING.md U7,
+// U16; the reference refuses it on read since 2.1)
 read.serializeIntRelative <- function(s, previous, h) {
-  checkPrevious(previous);
   if (s.error() != null) return false;
+  if (typeof previous != "integer" || previous < 0 || previous > INT_MAX) return s._fail(SerializeError.ValueOutOfRange);
   if (!s._room(1)) return false;
   if (s._take(1)) {
     local c = previous + 1;

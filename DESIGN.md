@@ -171,13 +171,16 @@ write data
 | `s.serializeString(h, bufferSize)` | `SerializeString` | a Squirrel string of well-formed UTF-8 with no zero byte |
 | `s.serializeAlign()` | `SerializeAlign` | |
 | `s.serializeObject(object)` | `SerializeObject` | an object with `serialize(stream)` returning true |
-| `s.serializeEnd()` | `SerializeEnd` | the end of the top-level object: on read, trailing_data then nonzero_padding; on write and measure nothing |
+| `s.serializeEnd()` | `SerializeEnd` | the end of the top-level object: on read, trailing_data then nonzero_padding; on write and measure a no-op returning true (IMPLEMENTING.md U12) |
+| `s.reject()`, `s.fail(reason)` | `Reject`, `Fail` | read only: latch `rejected` / `reason` (no reason or one outside the list latches `rejected`); on write and measure they answer false and latch nothing (U2, U14) |
+| `refusalName(reason)` | `serialize::refusal_name` | the family spelling, `"none"` for `SerializeError.None`, `"unknown"` outside the list (U14) |
+| `copyString(source, destSize)` | `serialize_copy_string` | returns at most `destSize - 1` bytes of `source`, stopping at a zero byte (U15) |
 | `s.serializeIntRelative(previous, h)` | `SerializeIntRelative` | int32 in [0, 2147483647] |
 | `s.alignBits()`, `s.bitsProcessed()`, `s.bytesProcessed()` | `AlignBits`, `BitsProcessed`, `BytesProcessed` | |
 | `s.error()`, `s.ok()` | `Err` (JS `error`, `ok`) | |
 | `s.setContext(c)`, `s.context()` | `SetContext`, `Context` | |
 | `s.reset(...)` | `Reset` | clears the latch, keeps the context |
-| `ws.flush()`, `ws.data()` | `Flush`, `Data` | `data()` returns a blob of `bytesProcessed()` bytes |
+| `ws.flush()`, `ws.data()` | `Flush`, `Data` | `data()` returns a blob of `bytesProcessed()` bytes; flush is required: the buffer is unspecified until it (U11) |
 
 **The deviations, each with its reason.**
 
@@ -418,16 +421,33 @@ min >= max or resolution <= 0; precomputed constants that are not what
 integer decodes to a non-finite value, (e); a compressed float value that is
 NaN, `+inf` or `-inf` after `fround`, which serialize.go clamps instead, (e); a
 previous outside the int_relative domain; bytes on an unaligned stream; a
-buffer that is not a multiple of 8 bytes), and where STANDARD.md says the
+buffer that is not a multiple of 8 bytes), on the write and the measure
+stream only, and where STANDARD.md says the
 writer is handed only conforming input: a string that is not well-formed UTF-8
 raises `serialize: a string must be well-formed UTF-8`, and one with a zero
 byte raises `serialize: a string must not contain a zero byte`, on the write
 and the measure stream.
-What serialize.go silently masks (the high bits of a `serializeBits` value
-above its width) this port masks too; serialize.go's clamp of a non-finite
+What serialize.go silently masks (the high bits of a `serializeBits`,
+`serializeBits64` or `serializeUint8/16/32` value above its width) this port
+catches instead: the value latches `ValueOutOfRange` and nothing is written
+(IMPLEMENTING.md U8: masking is not checking, and this port has no unchecked
+build). `serializeInt` bounds outside int32 raise (U5). A bytes or string write
+checks the room for the whole operation, length field, align and payload,
+before its first bit (U10). serialize.go's clamp of a non-finite
 compressed float is NOT copied: that is a raise above, uniform across the
 Luau, Lua and Squirrel ports. A raise is API misuse and happens in
-every stream state; only data latches.
+every stream state of a write or a measure; only data latches.
+
+**A reader never raises** (IMPLEMENTING.md U7, U16). Every bad declaration
+the writer raises on (a bit count that is not an integer in its range; min >
+max; `serializeInt` bounds outside int32; a Q format or bounds the format
+cannot hold; a buffer size outside [1, 2^31) or a string holder that is not a
+table with a value field; a bytes destination that is not a blob; compressed
+float parameters or precomputed constants that `compressedFloatParams` could
+not have derived, `maxIntegerValue` an integer in [1, 4294967040]; a previous
+outside the int_relative domain) refuses `ValueOutOfRange` on read, before any
+bit moves, after the failure state, so a failed stream keeps its first
+reason.
 
 **Reads forgive nothing** (format 2.0: every value has exactly one
 encoding). A packet reader reads its top-level object and then `serializeEnd`,
