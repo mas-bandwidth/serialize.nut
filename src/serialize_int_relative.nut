@@ -49,7 +49,6 @@ local checkPrevious = function(previous) {
 local write = {};
 write.serializeIntRelative <- function(s, previous, h) {
   checkPrevious(previous);
-  if (s.error() != null) return false;
   local current = h.value;
   // current is held in a 64-bit SQInteger, so the domain's top is checked too:
   // a current past 2^31 - 1 would write 32 bits its own reader refuses
@@ -131,7 +130,6 @@ read.serializeIntRelative <- function(s, previous, h) {
 local measure = {};
 measure.serializeIntRelative <- function(s, previous, h) {
   checkPrevious(previous);
-  if (s.error() != null) return false;
   local current = h.value;
   // current is held in a 64-bit SQInteger, so the domain's top is checked too:
   // a current past 2^31 - 1 would write 32 bits its own reader refuses

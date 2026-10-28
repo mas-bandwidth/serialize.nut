@@ -213,20 +213,19 @@ local readBytes = function(s, data) {
 };
 
 // putString(s, h, bufferSize): the length prefix, the align, then the bytes
-// (STANDARD.md, string). A string that does not fit latches ValueOutOfRange,
-// as serialize.go's WriteStream does; a write past the buffer latches PastEnd.
-// The writer is handed well-formed UTF-8 with no zero byte, as it is handed an
-// int in its range (STANDARD.md, string): anything else is API misuse and
-// raises in every stream state (DESIGN.md (g)).
+// (STANDARD.md, string). The writer is handed well-formed UTF-8 with no zero
+// byte that fits bufferSize - 1, as it is handed an int in its range
+// (STANDARD.md, string): anything else is write misuse and traps, on the
+// write and the measure stream, latching nothing; so does a write that does
+// not fit the room left (IMPLEMENTING.md U6, U9, U10; DESIGN.md (g)).
 local putString = function(s, h, bufferSize) {
   validateBufferSize(bufferSize);
   local value = writeString(h);
   local bytes = stringToBlob(value);
   if (hasNul(bytes)) throw PANIC_STRING_NUL;
   if (!utf8Valid(bytes)) throw PANIC_STRING_UTF8;
-  if (s.error() != null) return false;
   local length = value.len();
-  if (length >= bufferSize) return s._fail(E.ValueOutOfRange);
+  if (length >= bufferSize) return s._fail(E.ValueOutOfRange); // the trap (U9)
   // the whole operation's room first, the length field, the align after it
   // and the payload, so nothing is written ahead of a payload that does not
   // fit (IMPLEMENTING.md U10); a measure's room is unbounded

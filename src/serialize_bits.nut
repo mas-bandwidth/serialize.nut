@@ -29,19 +29,14 @@ local badBits = function(bits, top) {
   return typeof bits != "integer" || bits < 1 || bits > top;
 };
 
-// overWide(s, v, bits): U8, a write of a value that does not fit its width.
-// The port has no unchecked build, so the write catches it rather than mask
-// it, by the ranged ints' mechanism: it latches ValueOutOfRange and writes
-// nothing (DESIGN.md (g)). A bits width below 64 holds exactly the values
-// whose unsigned reading has no bit at or above bits; a 64-bit width holds
-// every SQInteger.
-local overWide = function(s, v, bits) {
-  if (s._error != null) return true;
-  if (typeof v != "integer" || (bits < 64 && (v >>> bits) != 0)) {
-    s._fail(Err.ValueOutOfRange);
-    return true;
-  }
-  return false;
+// checkWide(s, v, bits): U8, a write or a measure of a value that does not
+// fit its width. The port has no unchecked build, so it catches it rather
+// than mask it, by the one write-misuse mechanism: the trap, before any bit
+// moves, latching nothing (IMPLEMENTING.md U6, U9; DESIGN.md (g)). A bits
+// width below 64 holds exactly the values whose unsigned reading has no bit
+// at or above bits; a 64-bit width holds every SQInteger.
+local checkWide = function(s, v, bits) {
+  if (typeof v != "integer" || (bits < 64 && (v >>> bits) != 0)) s._fail(Err.ValueOutOfRange);
 };
 
 // mask32(k): the low k bits as a mask, k in [1,32] (k == 32 is a full dword,
@@ -102,7 +97,7 @@ _M.unsignedToSigned <- function(n) {
 
 // THE ARMS (DESIGN.md (g), (h)). An arm is function(stream, ...) with the
 // stream method's own arguments after the stream. The shape: (1) misuse
-// checks raising serialize.go's panic text; (2) `if (!s._room(n)) return false;`
+// checks, each the trap (IMPLEMENTING.md U9); (2) `if (!s._room(n)) return false;`
 // for the whole width before any bit moves; (3) the moves; (4) on read, every
 // refusal latched with s._fail, and only after all of them the holder assigned;
 // (5) return true.
@@ -116,7 +111,7 @@ local measure = {};
 // (IMPLEMENTING.md U8).
 write.serializeBits <- function(s, h, bits) {
   if (badBits(bits, 32)) throw PANIC_BITS_RANGE;
-  if (overWide(s, h.value, bits)) return false;
+  checkWide(s, h.value, bits);
   if (!s._room(bits)) return false;
   s._put(h.value & mask32(bits), bits);
   return true;
@@ -127,7 +122,7 @@ write.serializeBits <- function(s, h, bits) {
 // (b); serialize.go SerializeBits64).
 write.serializeBits64 <- function(s, h, bits) {
   if (badBits(bits, 64)) throw PANIC_BITS_RANGE64;
-  if (overWide(s, h.value, bits)) return false;
+  checkWide(s, h.value, bits);
   if (!s._room(bits)) return false;
   if (bits <= 32) {
     s._put(h.value & mask32(bits), bits);
@@ -148,24 +143,25 @@ write.serializeBool <- function(s, h) {
 // the fixed-width unsigned helpers are aliases for serializeBits at that width
 // (STANDARD.md, bits: the fixed-width helpers carry no range information).
 write.serializeUint8 <- function(s, h) {
-  if (overWide(s, h.value, 8)) return false;
+  checkWide(s, h.value, 8);
   if (!s._room(8)) return false;
   s._put(h.value & 0xff, 8);
   return true;
 }
 write.serializeUint16 <- function(s, h) {
-  if (overWide(s, h.value, 16)) return false;
+  checkWide(s, h.value, 16);
   if (!s._room(16)) return false;
   s._put(h.value & 0xffff, 16);
   return true;
 }
 write.serializeUint32 <- function(s, h) {
-  if (overWide(s, h.value, 32)) return false;
+  checkWide(s, h.value, 32);
   if (!s._room(32)) return false;
   s._put(h.value & 0xffffffff, 32);
   return true;
 }
 write.serializeUint64 <- function(s, h) {
+  checkWide(s, h.value, 64);
   if (!s._room(64)) return false;
   s._put(h.value & 0xffffffff, 32);
   s._put((h.value >>> 32) & 0xffffffff, 32);
@@ -173,12 +169,12 @@ write.serializeUint64 <- function(s, h) {
 }
 
 // serializeAlign: pads with zero bits to the next byte boundary; nothing is
-// written when already aligned (STANDARD.md, align). The aligned arm still
-// consults the failure state: a failed stream refuses a zero-bit align too
-// (STANDARD.md, Reader Obligations, "Failure is terminal").
+// written when already aligned (STANDARD.md, align). The read arm still
+// consults the failure state: a failed read refuses a zero-bit align too
+// (STANDARD.md, Reader Obligations, "Failure is terminal"); a write has none.
 write.serializeAlign <- function(s) {
   local n = s.alignBits();
-  if (n == 0) return s.ok();
+  if (n == 0) return true;
   if (!s._room(n)) return false;
   s._put(0, n);
   return true;
@@ -244,24 +240,26 @@ read.serializeAlign <- function(s) {
 // MeasureStream.alignBits() returns (DESIGN.md (g)).
 measure.serializeBits <- function(s, h, bits) {
   if (badBits(bits, 32)) throw PANIC_BITS_RANGE;
+  checkWide(s, h.value, bits);
   if (!s._room(bits)) return false;
   s._put(0, bits);
   return true;
 }
 measure.serializeBits64 <- function(s, h, bits) {
   if (badBits(bits, 64)) throw PANIC_BITS_RANGE64;
+  checkWide(s, h.value, bits);
   if (!s._room(bits)) return false;
   s._put(0, bits);
   return true;
 }
-// a failed measure stream is terminal like any other: _room answers false
-// once a measure has latched (a non-finite float, a value out of range)
-measure.serializeBool <- function(s, h) { if (!s._room(1)) return false; s._put(0, 1); return true; }
-measure.serializeUint8 <- function(s, h) { if (!s._room(8)) return false; s._put(0, 8); return true; }
-measure.serializeUint16 <- function(s, h) { if (!s._room(16)) return false; s._put(0, 16); return true; }
-measure.serializeUint32 <- function(s, h) { if (!s._room(32)) return false; s._put(0, 32); return true; }
-measure.serializeUint64 <- function(s, h) { if (!s._room(64)) return false; s._put(0, 64); return true; }
-measure.serializeAlign <- function(s) { if (!s._room(7)) return false; s._put(0, s.alignBits()); return true; }
+// a measure makes every check a write makes, the width included, and latches
+// nothing (IMPLEMENTING.md U6)
+measure.serializeBool <- function(s, h) { s._put(0, 1); return true; }
+measure.serializeUint8 <- function(s, h) { checkWide(s, h.value, 8); s._put(0, 8); return true; }
+measure.serializeUint16 <- function(s, h) { checkWide(s, h.value, 16); s._put(0, 16); return true; }
+measure.serializeUint32 <- function(s, h) { checkWide(s, h.value, 32); s._put(0, 32); return true; }
+measure.serializeUint64 <- function(s, h) { checkWide(s, h.value, 64); s._put(0, 64); return true; }
+measure.serializeAlign <- function(s) { s._put(0, s.alignBits()); return true; }
 
 _M.write <- write;
 _M.read <- read;

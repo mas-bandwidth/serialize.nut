@@ -77,12 +77,11 @@ local measure = {};
 
 // serializeInt(s, h, min, max): the int (ranged) codec. value - min is an in
 // the bits the range needs; a degenerate range min == max costs zero bits and
-// the value is the range (STANDARD.md int). A value outside [min,max] latches
-// ValueOutOfRange and writes nothing (DESIGN.md (g)).
+// the value is the range (STANDARD.md int). A value outside [min,max] is
+// write misuse: it traps and writes nothing (IMPLEMENTING.md U9; DESIGN.md (g)).
 write.serializeInt <- function(s, h, min, max) {
   if (min < INT32_MIN || max > INT32_MAX) throw PANIC_INT32;
   if (min > max) throw PANIC_MINMAX;
-  if (s._error != null) return false;
   local v = h.value;
   if (v < min || v > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired32(min, max);
@@ -114,7 +113,6 @@ read.serializeInt <- function(s, h, min, max) {
 measure.serializeInt <- function(s, h, min, max) {
   if (min < INT32_MIN || max > INT32_MAX) throw PANIC_INT32;
   if (min > max) throw PANIC_MINMAX;
-  if (s._error != null) return false;
   local v = h.value;
   if (v < min || v > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired32(min, max);
@@ -129,7 +127,6 @@ measure.serializeInt <- function(s, h, min, max) {
 // first, then the remaining bits - 32 high bits (STANDARD.md int64).
 write.serializeInt64 <- function(s, h, min, max) {
   if (min > max) throw PANIC_MINMAX;
-  if (s._error != null) return false;
   local v = h.value;
   if (v < min || v > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired64(min, max);
@@ -173,7 +170,6 @@ read.serializeInt64 <- function(s, h, min, max) {
 
 measure.serializeInt64 <- function(s, h, min, max) {
   if (min > max) throw PANIC_MINMAX;
-  if (s._error != null) return false;
   local v = h.value;
   if (v < min || v > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired64(min, max);

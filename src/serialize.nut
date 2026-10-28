@@ -102,7 +102,11 @@ local lazy = function(family, name, arity) {
 };
 
 // THE API (DESIGN.md (a)): serialize.go v2.0.0's exports in serialize.js's
-// spelling.
+// spelling, and nothing beyond what IMPLEMENTING.md U15's export ruling
+// allows: the reference operations and streams, the refusal list and its
+// name, copyString, the U15 extras (Continue, Until), the reference's public
+// helpers, and the language necessities, each marked where it is exported.
+// The loader's directory is internal and not exported.
 local api = {
   // the refusal reasons latched on a stream (STANDARD.md, Refusal reasons;
   // serialize.go v2's Refusal); None is a healthy stream
@@ -113,17 +117,24 @@ local api = {
   refusalName = streams.refusalName,
 
   // copyString(source, destSize): the reference's serialize_copy_string in
-  // Squirrel's idiom (IMPLEMENTING.md U15): a string is a value, so the copy
-  // is returned rather than written into a destination; it holds at most
-  // destSize - 1 bytes of source and stops at the first zero byte. destSize
-  // below 1 raises (the reference asserts it).
+  // Squirrel's idiom (IMPLEMENTING.md U15, ruling 2026-10-27): a string is a
+  // value, so the copy is returned rather than written into a destination.
+  // On the source's bytes: the bytes before the first zero byte; if more than
+  // destSize - 1, the first destSize - 1 of them, then bytes dropped from the
+  // end while the first byte left out is a UTF-8 continuation byte
+  // (10xxxxxx), so the copy never ends inside a character. Squirrel strings
+  // are bytes, so this holds for ill-formed text too. destSize below 1 is
+  // write misuse and traps (U9).
   copyString = function(source, destSize) {
-    if (typeof source != "string") throw "serialize: copyString copies a string";
-    if (typeof destSize != "integer" || destSize < 1) throw "serialize: copyString requires destSize >= 1";
-    local n = source.len() < destSize - 1 ? source.len() : destSize - 1;
-    for (local i = 0; i < n; i++) {
-      if (source[i] == 0) { n = i; break; }
+    if (typeof source != "string") throw "serialize: write misuse: copyString copies a string";
+    if (typeof destSize != "integer" || destSize < 1) throw "serialize: write misuse: copyString requires destSize >= 1";
+    local len = source.len();
+    for (local i = 0; i < len; i++) {
+      if (source[i] == 0) { len = i; break; }
     }
+    if (len <= destSize - 1) return source.slice(0, len);
+    local n = destSize - 1;
+    while (n > 0 && (source[n] & 0xC0) == 0x80) n--;
     return source.slice(0, n);
   },
 
@@ -143,14 +154,18 @@ local api = {
   signedToUnsigned = lazy("serialize_bits", "signedToUnsigned", 1),
   unsignedToSigned = lazy("serialize_bits", "unsignedToSigned", 1),
 
-  // 128-bit values as [lo, hi] (serialize-squirrel-int); serialize_int128.nut
+  // 128-bit values as [lo, hi] (serialize-squirrel-int); serialize_int128.nut.
+  // A LANGUAGE NECESSITY (IMPLEMENTING.md U15): Squirrel has no 128-bit
+  // integer, so the 128-bit carrier's constructors are exported
   int128From64 = lazy("serialize_int128", "int128From64", 1),
   uint128From64 = lazy("serialize_int128", "uint128From64", 1),
 
   // the precomputed compressed float (serialize-squirrel-compressed-float)
   compressedFloatParams = lazy("serialize_compressed_float", "compressedFloatParams", 3),
 
-  // the float32 narrowing every float32 write uses (serialize-squirrel-float)
+  // the float32 narrowing every float32 write uses (serialize-squirrel-float).
+  // A LANGUAGE NECESSITY (IMPLEMENTING.md U15): Squirrel has no float32 type,
+  // so the float32 rounding is exported
   fround = lazy("serialize_float", "fround", 1),
 
   // sentinel-driven loops that always terminate (serialize.go Continue and
@@ -164,9 +179,6 @@ local api = {
     if (!stream.serializeBool(done)) return false;
     return !done.value;
   },
-
-  // the loader's own directory, for tests and tools (DESIGN.md (f))
-  dir = dir,
 };
 
 return api;

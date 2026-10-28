@@ -185,7 +185,6 @@ local measure = {};
 // from the range (STANDARD.md int).
 write.serializeInt128 <- function(s, h, min, max) {
   if (i128cmp(min, max) > 0) throw PANIC_MINMAX;
-  if (s._error != null) return false;
   local v = h.value;
   if (i128cmp(v, min) < 0 || i128cmp(v, max) > 0) return s._fail(SerializeError.ValueOutOfRange);
   local numBits = u128len(u128sub(max, min));
@@ -213,7 +212,6 @@ read.serializeInt128 <- function(s, h, min, max) {
 
 measure.serializeInt128 <- function(s, h, min, max) {
   if (i128cmp(min, max) > 0) throw PANIC_MINMAX;
-  if (s._error != null) return false;
   local v = h.value;
   if (i128cmp(v, min) < 0 || i128cmp(v, max) > 0) return s._fail(SerializeError.ValueOutOfRange);
   local numBits = u128len(u128sub(max, min));
@@ -226,7 +224,6 @@ measure.serializeInt128 <- function(s, h, min, max) {
 // serializeUint128(s, h): the raw unsigned 128-bit integer, always 128 bits:
 // the low 64-bit half first, then the high half (STANDARD.md uint128)
 write.serializeUint128 <- function(s, h) {
-  if (s._error != null) return false;
   if (!s._room(128)) return false;
   local v = h.value;
   s._put(v[0] & 0xFFFFFFFF, 32);
@@ -250,7 +247,6 @@ read.serializeUint128 <- function(s, h) {
 };
 
 measure.serializeUint128 <- function(s, h) {
-  if (s._error != null) return false;
   if (!s._room(128)) return false;
   s._put(0, 128);
   return true;

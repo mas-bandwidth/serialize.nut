@@ -23,9 +23,11 @@
 //     before it (STANDARD.md, Reader Obligations; DESIGN.md (g), security
 //     trumps).
 //  4. For 1 in 8 programs whose bytes exceed one 8-byte word, both writers
-//     write into a buffer one word too short and must refuse at the same step
-//     with the same reason (DESIGN.md (g): a full buffer latches PastEnd
-//     exactly where serialize.go's WriteStream returns ErrPastEnd).
+//     write into a buffer one word too short and must stop at the same step:
+//     the Squirrel writer traps (IMPLEMENTING.md U9, U10; DESIGN.md (g)) exactly
+//     where serialize.go's WriteStream returns ErrPastEnd, and fuzz/driver.nut
+//     answers that room trap as past_end; any other trap answers trap, which
+//     never agrees.
 //
 // The driver takes programs as text, one interpreter process per batch of 100
 // programs, the batch in a file in a t.TempDir() (the card's batching; the

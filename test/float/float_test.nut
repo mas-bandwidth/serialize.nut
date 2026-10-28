@@ -13,6 +13,17 @@ local check = function(cond, what) {
   if (!cond) throw "TestSerializeFloat: " + what;
 };
 
+// traps(fn, what): fn() throws the library's write-misuse trap
+// (IMPLEMENTING.md U9; DESIGN.md (g)). fn is called directly, never through
+// .call or acall: sq prints a throw that crosses a native call to stderr even
+// when it is caught (DESIGN.md (i)).
+local traps = function(fn, what) {
+  local got = null;
+  try { fn(); } catch (e) { got = e; }
+  check(got != null, what + ": did not trap");
+  check(typeof got == "string" && got.len() >= 25 && got.slice(0, 25) == "serialize: write misuse: ", what + ": trapped with " + got);
+};
+
 local readText = function(path) {
   local f = file(path, "rb");
   local b = f.readblob(f.len());
@@ -244,7 +255,8 @@ function TestSerializeFloat() {
     function(ws, h) { return ws.serializeDouble(h); }, 8);
 
   // FINITE VALUES ONLY (STANDARD.md, format 2.0). A write or a measure handed a
-  // non-finite value latches non_finite_float and writes nothing, checked after
+  // non-finite value traps and writes nothing, latching nothing (IMPLEMENTING.md
+  // U6, U9), checked after
   // the float32 narrowing, so a finite double above FLT_MAX (which narrows to
   // +inf) is refused by serializeFloat while serializeDouble carries it. A NaN
   // whose payload lives only in the double's low 29 bits narrows to a NaN, never
@@ -256,8 +268,8 @@ function TestSerializeFloat() {
   local aboveFltMax = casti2f(0x47F0000000000000); // 2^128, finite, past float32's range
   local refusesWrite = function(write, value, what) {
     foreach (stream in [serialize.WriteStream(blob(16)), serialize.MeasureStream()]) {
-      check(write(stream, { value = value }) == false, what + ": a non-finite value was accepted");
-      check(stream.error() == serialize.SerializeError.NonFiniteFloat, what + ": latched " + stream.error());
+      traps(function() { write(stream, { value = value }); }, what);
+      check(stream.error() == null, what + ": latched " + stream.error());
       check(stream.bitsProcessed() == 0, what + ": wrote " + stream.bitsProcessed() + " bits");
     }
   };
@@ -268,16 +280,15 @@ function TestSerializeFloat() {
   check((float32Bits(lowPayloadNan) & 0x7FFFFF) != 0, "a NaN with only low payload bits narrowed to an infinity");
   local wd = serialize.WriteStream(blob(16));
   check(wd.serializeDouble({ value = aboveFltMax }), "a finite double above FLT_MAX was refused by serializeDouble");
-  // the first refusal latches: a later finite write fails too, with the same reason
+  // write misuse never latches (U9): a later finite write emits what it would have
   local wl = serialize.WriteStream(blob(16));
-  check(wl.serializeFloat({ value = quietNan }) == false && wl.serializeFloat({ value = 1.0 }) == false, "a latched writer accepted a later float");
-  check(wl.error() == serialize.SerializeError.NonFiniteFloat, "the later write changed the reason to " + wl.error());
-  // a full buffer is past_end, a non-finite value is non_finite_float first
+  traps(function() { wl.serializeFloat({ value = quietNan }); }, "a NaN float write");
+  check(wl.serializeFloat({ value = 1.0 }) && wl.bitsProcessed() == 32 && wl.error() == null, "a later finite write failed after a trap");
+  // a full buffer traps too, on a finite value as on a non-finite one
   local full = serialize.WriteStream(blob(0));
-  check(full.serializeFloat({ value = 1.0 }) == false && full.error() == serialize.SerializeError.PastEnd, "a full writer latched " + full.error());
+  traps(function() { full.serializeFloat({ value = 1.0 }); }, "a float on a full writer");
   local fullNan = serialize.WriteStream(blob(0));
-  check(fullNan.serializeDouble({ value = quietNan }) == false && fullNan.error() == serialize.SerializeError.NonFiniteFloat,
-    "a non-finite value on a full writer latched " + fullNan.error());
+  traps(function() { fullNan.serializeDouble({ value = quietNan }); }, "a NaN double on a full writer");
   // negative zero and the subnormals are finite and travel bit for bit
   foreach (bits in [0x80000000, 0x00000001, 0x807FFFFF]) {
     local ws = serialize.WriteStream(blob(8));

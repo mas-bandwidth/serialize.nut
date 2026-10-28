@@ -21,6 +21,17 @@ local check = function(cond, what) {
   if (!cond) throw "TestSerializeEnd: " + what;
 };
 
+// traps(fn, what): fn() throws the library's write-misuse trap
+// (IMPLEMENTING.md U9; DESIGN.md (g)). fn is called directly, never through
+// .call or acall: sq prints a throw that crosses a native call to stderr even
+// when it is caught (DESIGN.md (i)).
+local traps = function(fn, what) {
+  local got = null;
+  try { fn(); } catch (e) { got = e; }
+  check(got != null, what + ": did not trap");
+  check(typeof got == "string" && got.len() >= 25 && got.slice(0, 25) == "serialize: write misuse: ", what + ": trapped with " + got);
+};
+
 local bytesOf = function(list) {
   local b = blob(list.len());
   for (local i = 0; i < list.len(); i++) b[i] = list[i];
@@ -85,9 +96,10 @@ function TestSerializeEnd() {
   local ms = serialize.MeasureStream();
   check(ms.serializeEnd() && ms.bitsProcessed() == 0, "the measure's end charged " + ms.bitsProcessed() + " bits");
   local wf = serialize.WriteStream(blob(8));
-  wf._room(65);
+  traps(function() { wf.serializeBits64({ value = 0 }, 64); wf.serializeBool({ value = true }); }, "a write past the buffer");
   // U12 (IMPLEMENTING.md): end on a write or a measure is a no-op returning
-  // true, whatever the stream's state; the failure is still the stream's.
-  // Reversed witness: the 2.1.0 port's end answered false on a failed writer.
-  check(wf.serializeEnd() == true && wf.error() == E.PastEnd, "a failed writer's end answered false, or changed the reason to " + wf.error());
+  // true, whatever the stream's state; a write stream has no refusal state
+  // for misuse to set (U9). Reversed witness: the 2.1.0 port's end answered
+  // false on a failed writer.
+  check(wf.serializeEnd() == true && wf.error() == null, "a writer's end after a trap answered false, or latched " + wf.error());
 }

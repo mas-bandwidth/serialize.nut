@@ -13,13 +13,13 @@ already decides.
 |---|---|
 | the reference | `mas-bandwidth/serialize.go` tag `v2.0.0` (`a3ffd9136906dfc4db5b2fb6d146181d749b00c5`, module `github.com/mas-bandwidth/serialize.go/v2`), read, never imported by the library (the fuzz differential imports it) |
 | the closest worked example | `mas-bandwidth/serialize.js` main at `ff765a1a89a89dc3f6e818e553baabf189241b4e` (`src/index.js`, `src/streams.js`), read, never imported |
-| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.1.0` (`884bc3098c9619d67308d9c6b5cdf38593d98b69`: format 2.0 unchanged; standard 2.1 adds the `rejected` refusal reason, the `reject` step and the U1-U16 rules of IMPLEMENTING.md; `tools/revendor.sh <tag>` re-vendors them) |
+| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.1.1` (`bd3d67e23c8acc2c45eff69633dbe16c029a2cba`: format 2.0 unchanged; standard 2.1 adds the `rejected` refusal reason, the `reject` step and the U1-U16 rules of IMPLEMENTING.md, and 2.1.1 the U3, U6, U9 and U15 rulings; the corpus is unchanged since v2.1.0; `tools/revendor.sh <tag>` re-vendors them) |
 | the number, byte, float32 and loading rules | `mas-bandwidth/schema` `docs/PORT-SQUIRREL.md` at `f676cb9adc8a653abcdce38034e99ec3c3aad6b8` (branch `sprint/schema-squirrel-port-design.w1.g1.e21`), restated in (c) to (f) with no change of substance |
 | the interpreter | Squirrel 3.2, built `sq64` with `-DSQUSEDOUBLE` (`make dist-squirrel`) |
 
 **The vendored copies are the reference's copies.** `diff -r` of this
 repository's `STANDARD.md`, `IMPLEMENTING.md`, `conformance/` and
-`conformance-controls/` against serialize v2.1.0's is empty (the corpus job in
+`conformance-controls/` against serialize v2.1.1's is empty (the corpus job in
 CI holds them to it), so the Go oracle and this port read the same 18 vector
 files and the same standard, byte for byte.
 
@@ -54,26 +54,32 @@ untouched on failure.
 
 **Returns.** Every serialize method returns `true` on success and `false` on
 failure; the failure's kind is `stream.error()`. Go returns `error`, JS
-returns a boolean; this is JS's model.
+returns a boolean; this is JS's model. Only a read fails with a reason: write
+and measure misuse is not a failure but the trap, (g) (IMPLEMENTING.md U9),
+and a write or a measure returns `false` only from `fail` or a nested object
+that returns anything but `true`, recording nothing.
 
 **The refusal reasons** are STANDARD.md's closed list of nine ("Refusal
 reasons"), each value spelled exactly as the standard spells it, and
-serialize.go v2's `Refusal` sentinels, latched on the stream:
+serialize.go v2's `Refusal` sentinels, latched on a read stream (a write or a
+measure stream latches nothing, (g)):
 
 | `SerializeError.` | serialize.go | meaning |
 |---|---|---|
 | `None` (`null`) | `nil` | the stream is healthy |
-| `PastEnd` (`"past_end"`) | `ErrPastEnd` | a read past the end of the data, or a write past the end of the buffer |
-| `ValueOutOfRange` (`"value_out_of_range"`) | `ErrValueOutOfRange` | a ranged offset past its span, a string length past its buffer, a compressed integer past `max_integer_value`, an int_relative outside its domain or not increasing; on write, a value outside its range |
+| `PastEnd` (`"past_end"`) | `ErrPastEnd` | a read past the end of the data |
+| `ValueOutOfRange` (`"value_out_of_range"`) | `ErrValueOutOfRange` | a ranged offset past its span, a string length past its buffer, a compressed integer past `max_integer_value`, an int_relative outside its domain or not increasing, a bad declaration on read |
 | `NonzeroPadding` (`"nonzero_padding"`) | `ErrNonzeroPadding` | a set bit in an align's padding (align, bytes, string), or in the final byte's unused bits at the end |
 | `TrailingData` (`"trailing_data"`) | `ErrTrailingData` | a whole byte or more after the end of the object |
-| `NonFiniteFloat` (`"non_finite_float"`) | `ErrNonFiniteFloat` | a float or double that is NaN or an infinity, or a compressed float decode that is not finite; on write and measure, a non-finite float or double |
+| `NonFiniteFloat` (`"non_finite_float"`) | `ErrNonFiniteFloat` | a float or double that is NaN or an infinity, or a compressed float decode that is not finite |
 | `InvalidUtf8` (`"invalid_utf8"`) | `ErrInvalidUTF8` | a string payload that is not well-formed UTF-8 |
 | `EmbeddedNul` (`"embedded_nul"`) | `ErrEmbeddedNul` | a zero byte among a string's bytes, checked before the encoding |
 | `NonCanonical` (`"non_canonical"`) | `ErrNonCanonical` | the int_relative absolute tier carrying a difference a bounded tier carries |
-| `Rejected` (`"rejected"`) | (none in serialize.go v2.0.0) | the caller's own refusal: `ReadStream.reject()`, or a nested object whose `serialize` returns anything but `true` with nothing latched (STANDARD.md 2.1; IMPLEMENTING.md U2). `reject()` on a write or a measure answers false and latches nothing |
+| `Rejected` (`"rejected"`) | (none in serialize.go v2.0.0) | the caller's own refusal: `ReadStream.reject()`, or a nested object whose `serialize` returns anything but `true` with nothing latched, on a read (STANDARD.md 2.1; IMPLEMENTING.md U2). `reject()` on a write or a measure is caller misuse and traps (U9) |
 
-The FIRST refusal sticks: every later call fails with that same reason (its
+`value_out_of_range`, `non_finite_float`, `invalid_utf8`, `embedded_nul` and
+`past_end` are a reader's reasons only (IMPLEMENTING.md U9). On a read the
+FIRST refusal sticks: every later call fails with that same reason (its
 echoes keep it), consumes nothing and writes nothing to its holder or
 destination, zero-bit calls included (an aligned align, a degenerate range, a
 zero-count bytes, an object, an end). Only `reset` clears it. A refusal is
@@ -172,14 +178,14 @@ write data
 | `s.serializeAlign()` | `SerializeAlign` | |
 | `s.serializeObject(object)` | `SerializeObject` | an object with `serialize(stream)` returning true |
 | `s.serializeEnd()` | `SerializeEnd` | the end of the top-level object: on read, trailing_data then nonzero_padding; on write and measure a no-op returning true (IMPLEMENTING.md U12) |
-| `s.reject()`, `s.fail(reason)` | `Reject`, `Fail` | read only: latch `rejected` / `reason` (no reason or one outside the list latches `rejected`); on write and measure they answer false and latch nothing (U2, U14) |
+| `s.reject()`, `s.fail(reason)` | `Reject`, `Fail` | on read: latch `rejected` / `reason` (no reason or one outside the list latches `rejected`). On write and measure `fail` answers false, records nothing and never traps; `reject` traps (U2, U9, U14) |
 | `refusalName(reason)` | `serialize::refusal_name` | the family spelling, `"none"` for `SerializeError.None`, `"unknown"` outside the list (U14) |
-| `copyString(source, destSize)` | `serialize_copy_string` | returns at most `destSize - 1` bytes of `source`, stopping at a zero byte (U15) |
+| `copyString(source, destSize)` | `serialize_copy_string` | the bytes before the first zero byte; past `destSize - 1`, the first `destSize - 1` of them, backed off while the first byte left out is a continuation byte (`10xxxxxx`), so it never ends inside a character; `destSize` below 1 traps (U15, U9) |
 | `s.serializeIntRelative(previous, h)` | `SerializeIntRelative` | int32 in [0, 2147483647] |
 | `s.alignBits()`, `s.bitsProcessed()`, `s.bytesProcessed()` | `AlignBits`, `BitsProcessed`, `BytesProcessed` | |
 | `s.error()`, `s.ok()` | `Err` (JS `error`, `ok`) | |
 | `s.setContext(c)`, `s.context()` | `SetContext`, `Context` | |
-| `s.reset(...)` | `Reset` | clears the latch, keeps the context |
+| `s.reset(...)` | `Reset` | clears a read's latch and the bit index, keeps the context |
 | `ws.flush()`, `ws.data()` | `Flush`, `Data` | `data()` returns a blob of `bytesProcessed()` bytes; flush is required: the buffer is unspecified until it (U11) |
 
 **The deviations, each with its reason.**
@@ -203,9 +209,29 @@ write data
   shares this one narrowing (e).
 - `serializeObject`: serialize.go latches the error the object returns. A
   Squirrel serializer returns a boolean, so an object that returns anything
-  but `true` fails the call, and when it latched nothing itself the stream
-  latches `Rejected` (STANDARD.md 2.1, "Refusal reasons"; it latched
-  `ValueOutOfRange` before 2.1).
+  but `true` fails the call; on a read, when it latched nothing itself the
+  stream latches `Rejected` (STANDARD.md 2.1, "Refusal reasons"; it latched
+  `ValueOutOfRange` before 2.1). On a write or a measure it records nothing
+  (IMPLEMENTING.md U9).
+
+**The exports, under IMPLEMENTING.md U15's export ruling** (serialize v2.1.1,
+"Exports beyond the reference operations"). The table the entry returns holds
+exactly these, and TestU15Exports requires it:
+
+| export | allowed as |
+|---|---|
+| `WriteStream`, `ReadStream`, `MeasureStream` | the three streams |
+| `SerializeError`, `refusalName` | the refusal list and its name function (U14) |
+| `copyString` | `serialize_copy_string` (U15) |
+| `Continue`, `Until` | U15 extras |
+| `BitWriter`, `BitReader`, `bitsRequired`, `bitsRequired64`, `bitsRequired128`, `signedToUnsigned`, `unsignedToSigned`, `compressedFloatParams` | the reference's own public helpers |
+| `fround` | a language necessity: float32 rounding, where Squirrel has no float32 type |
+| `int128From64`, `uint128From64` | a language necessity: the 128-bit carrier's constructors, where Squirrel has no 128-bit integer |
+
+The loader's directory is internal and not exported (it was `serialize.dir`
+before 2.1.1). The streams' `_`-prefixed members (`_fail`, `_room`, `_put`,
+`_take`, `_trap`, `_arm` and the fields) are internal: Squirrel has no private
+class members, so they are documented here as internal, with no promise.
 
 ## (b) BIT ORDER AND ENDIANNESS
 
@@ -319,8 +345,9 @@ reads and writes one byte, 0..255), with `len`, `readblob`, `writeblob`,
   is all ones (NaN with any payload, either sign, and both infinities) is not
   a value the format carries. A read tests the RAW BITS and refuses with
   `NonFiniteFloat` before the holder is written; a write or a measure handed
-  one latches `NonFiniteFloat` and writes nothing, as serialize.go v2's
-  WriteStream and MeasureStream return `ErrNonFiniteFloat`. The float write
+  one traps and writes nothing, latching nothing (g) (IMPLEMENTING.md U6,
+  U9; serialize.go v2.0.0 returns `ErrNonFiniteFloat` there instead, a
+  latch the 2.1.1 ruling does not allow). The float write
   checks after the narrowing, so a finite double above float32's range, which
   narrows to an infinity, is refused too. `fround` of a NaN is the quiet
   float32 NaN of its sign: no payload is carried, because no NaN travels.
@@ -354,25 +381,33 @@ reads and writes one byte, 0..255), with `len`, `readblob`, `writeblob`,
   resolution `2^104` the top integer does) refuses with `NonFiniteFloat`, the
   holder untouched, whatever the declaration. A write or a measure on a
   declaration whose top integer decodes to a non-finite value (`min + delta`,
-  rounded once) raises serialize.go v2's panic text, `serialize: compressed
+  rounded once) traps with serialize.go v2's panic text, `serialize: compressed
   float declaration decodes its top integer to a value that is not finite`,
   whatever the value.
-- **A non-finite compressed_float input RAISES on write** (coordinator
-  ruling, uniform across the Luau, Lua and Squirrel ports; STANDARD.md,
+- **A declaration whose `max - min`, or whose `(max - min) / resolution`, is
+  not finite in float32 traps** on a write and a measure, and from
+  `compressedFloatParams` (STANDARD.md compressed_float; the reference's
+  `serialize_compressed_float_params` asserts both): `(0, 1e38, 1e-38)` is
+  one, and is never clamped to 4294967040 there. The test is on the bits,
+  because Squirrel's float comparison is not IEEE's: on the pin `NaN > 0` is
+  true, so a NaN resolution passes the `resolution > 0` guard and is caught
+  here as a NaN quotient. The read arm keeps its clamp, unchanged, so the read
+  path costs nothing more.
+- **A non-finite compressed_float input TRAPS on write** (IMPLEMENTING.md
+  U9, "`compressed_float`'s clamp is no exception"; STANDARD.md,
   compressed_float, "Non-finite inputs are non-conforming": "Conforming
   writers assert in checked builds", Glenn verbatim "should assert out on
   write too"). The value a `serializeCompressedFloat` or
   `serializeCompressedFloatPrecomputed` write is given is `fround`ed first;
-  if the result is NaN, `+inf` or `-inf` the arm raises
-  `serialize: compressed float value is not finite` before any bit moves, in
-  every stream state, and nothing is latched or written. This is a deliberate
-  deviation from serialize.go, which clamps such a value (a NaN normalizes
-  into the range and is written as some integer): this writer is the checked
-  build, (g), so the emulation of `compressedFloat32Precomputed` above covers
-  finite inputs only and never copies the clamp for a non-finite one. The
-  measure stream raises the same way (it raises on misuse like the writer).
-  The read path never raises: the poison is in the input value, never on the
-  wire, so a read refuses (above) and never raises.
+  if the result is NaN, `+inf` or `-inf` the arm traps with
+  `serialize: compressed float value is not finite` before any bit moves,
+  and nothing is latched or written. serialize.go clamps such a value (a NaN
+  normalizes into the range and is written as some integer); that clamp is
+  unchecked-build behaviour, and this port has no unchecked build, (g), so
+  the emulation of `compressedFloat32Precomputed` above covers finite inputs
+  only and never copies it. The measure stream traps the same way (U6). The
+  read path never traps: the poison is in the input value, never on the
+  wire, so a read refuses (above).
 
 ## (f) LOADING IS CLOSED
 
@@ -406,40 +441,69 @@ traversal name is refused by name.
 
 ## (g) WRITER AND READER
 
-**The writer is STRICT**: exactly serialize.go v2.0.0's bytes. It latches
-`ValueOutOfRange`, `NonFiniteFloat` or `PastEnd` exactly where serialize.go's
-WriteStream returns `ErrValueOutOfRange`, `ErrNonFiniteFloat` or `ErrPastEnd`
-(a ranged int, int64 or int128 value outside [min,max]; a fixed raw value
-outside its raw bounds; a string that does not fit its buffer; a float or
-double that is not finite; an int_relative current not greater than previous;
-a write past the buffer), and it RAISES, naming the rule with serialize.go's
-panic text, where serialize.go panics on API misuse
-(bits outside [1,32] or [1,64]; min > max; a Q format or bounds the format
-cannot hold; a buffer size outside [1, 2^31); compressed float parameters with
-min >= max or resolution <= 0; precomputed constants that are not what
-`compressedFloatParams` derives; a compressed float declaration whose top
-integer decodes to a non-finite value, (e); a compressed float value that is
-NaN, `+inf` or `-inf` after `fround`, which serialize.go clamps instead, (e); a
-previous outside the int_relative domain; bytes on an unaligned stream; a
-buffer that is not a multiple of 8 bytes), on the write and the measure
-stream only, and where STANDARD.md says the
-writer is handed only conforming input: a string that is not well-formed UTF-8
-raises `serialize: a string must be well-formed UTF-8`, and one with a zero
-byte raises `serialize: a string must not contain a zero byte`, on the write
-and the measure stream.
-What serialize.go silently masks (the high bits of a `serializeBits`,
-`serializeBits64` or `serializeUint8/16/32` value above its width) this port
-catches instead: the value latches `ValueOutOfRange` and nothing is written
-(IMPLEMENTING.md U8: masking is not checking, and this port has no unchecked
-build). `serializeInt` bounds outside int32 raise (U5). A bytes or string write
-checks the room for the whole operation, length field, align and payload,
-before its first bit (U10). serialize.go's clamp of a non-finite
-compressed float is NOT copied: that is a raise above, uniform across the
-Luau, Lua and Squirrel ports. A raise is API misuse and happens in
-every stream state of a write or a measure; only data latches.
+**One write-misuse mechanism: the trap** (IMPLEMENTING.md U9, the ruling of
+2026-10-27 in serialize v2.1.1). Write misuse is everything the check model,
+U1, U3 to U5, U8, U10 and U16 name on a write or a measure stream, and this
+port catches every one of them the same way, on every operation,
+`compressed_float` included: **the trap, a thrown string** (Squirrel's
+nearest thing to an assertion that does not come back to the caller as a
+value). Squirrel has no unchecked build, so this port is a checked build
+always and traps in every run. The trap is thrown at the call, before any bit
+of the operation moves (U10: room is a whole-operation check), and nothing is
+recorded on the stream:
 
-**A reader never raises** (IMPLEMENTING.md U7, U16). Every bad declaration
-the writer raises on (a bit count that is not an integer in its range; min >
+- a value outside its range or its bit width: a ranged int, int64 or int128
+  outside [min,max]; a fixed raw value outside its raw bounds; an
+  int_relative current not greater than previous or past 2^31 - 1; a
+  `serializeBits`, `serializeBits64` or `serializeUint8/16/32/64` value with a
+  bit at or above its width (serialize.go masks it; U8: masking is not
+  checking) — `serialize: write misuse: a value outside its range or its bit
+  width, or a string longer than bufferSize - 1`;
+- a `float` or `double` that is NaN or an infinity, the float checked after
+  the narrowing, (e) — `serialize: write misuse: a float or double value that
+  is not finite`; a `compressed_float` value that is not finite, (e) —
+  `serialize: compressed float value is not finite`;
+- a string longer than `bufferSize - 1` (the text above), one with a zero byte
+  (`serialize: a string must not contain a zero byte`) or one that is not
+  well-formed UTF-8 (`serialize: a string must be well-formed UTF-8`);
+- an operation that does not fit the room left in the buffer, the whole
+  operation checked first, a bytes or a string's length field, align and
+  payload included — `serialize: write misuse: an operation that does not fit
+  the room left in the buffer`;
+- a bad declaration, with serialize.go's panic text: bits outside [1,32] or
+  [1,64]; min > max; `serializeInt` bounds outside int32 (U5); a Q format or
+  bounds the format cannot hold; a buffer size outside [1, 2^31); compressed
+  float parameters with min >= max, resolution <= 0, or a `max - min` or
+  `(max - min) / resolution` that is not finite in float32, (e); precomputed
+  constants that are not what `compressedFloatParams` derives; a compressed
+  float declaration whose top integer decodes to a non-finite value, (e); a
+  previous outside the int_relative domain; bytes on an unaligned stream;
+- a write buffer that is not a multiple of 8 bytes (U1);
+- `reject()` on a write or a measure: `serialize: write misuse: reject on a
+  write or a measure stream (a refusal is read only)`;
+- `copyString` with `destSize` below 1 (U15).
+
+**Write misuse never latches.** A write or a measure stream has no refusal
+state for misuse to set: `error()` stays `null`, no misuse makes a later
+operation fail, and a later write emits exactly what it would have without
+it. `value_out_of_range`, `non_finite_float`, `invalid_utf8`, `embedded_nul`
+and `past_end` are a reader's reasons only. Two calls on a write or a measure
+return `false`, and they record nothing and never trap: `fail(reason)`, the
+path every refusal takes, so a serialize function shared by the read and the
+write side can call it; and `serializeObject` of an object whose `serialize`
+returns anything but `true`. (Before 2.1.1 this port latched
+`ValueOutOfRange`, `NonFiniteFloat` and `PastEnd` on a write where
+serialize.go v2.0.0 returns them, and raised on declarations: two mechanisms,
+which U9 does not allow.)
+
+**The writer is STRICT**: for every program it accepts, exactly serialize.go
+v2.0.0's bytes (the fuzz differential holds it). Where serialize.go v2.0.0
+returns `ErrPastEnd` for a buffer that runs out, this writer traps at the
+same operation; the differential's short-buffer check requires that step to
+agree.
+
+**A reader never traps** (IMPLEMENTING.md U7, U16). Every bad declaration
+the writer traps on (a bit count that is not an integer in its range; min >
 max; `serializeInt` bounds outside int32; a Q format or bounds the format
 cannot hold; a buffer size outside [1, 2^31) or a string holder that is not a
 table with a value field; a bytes destination that is not a blob; compressed
@@ -470,32 +534,36 @@ operation's own rules) and serialize.go state is made, every time:
   is terminal after one refusal, keeping the first refusal's reason;
 - a length-prefixed read (string) checks the claimed length against the bytes
   that remain BEFORE it allocates the payload;
-- hostile bytes never raise: a raise is only ever API misuse by the caller,
+- hostile bytes never trap: a trap is only ever misuse by the caller,
   never data.
 
 **The measure stream** is a conservative bound (STANDARD.md The Measure
 Stream): exact width for every operation but `align`, `bytes` and `string`,
 which charge the worst case of 7 alignment bits; `alignBits()` is 7; the end
-costs nothing. Like serialize.go's, it latches what the writer latches on a
-value (out of range, not finite) and raises on misuse like the writer.
+costs nothing. It makes every check a write makes, except the room left in a
+buffer it does not have, by the same trap, and latches nothing
+(IMPLEMENTING.md U6): an over-wide bits value traps on a measure as on a
+write.
 
 **The skeleton's primitives** (in `serialize_stream.nut`, IMPLEMENTED) are
 what every arm uses; an arm never touches the bit packer itself:
 
 | primitive | WriteStream | ReadStream | MeasureStream |
 |---|---|---|---|
-| `s._fail(kind)` | latch kind if healthy; returns false | same | same |
-| `s._room(n)` | false if latched; latches `PastEnd` if `bits + n > 8 * buffer.len()` | false if latched; latches `PastEnd` if `bits + n > 8 * data.len()` | false if latched, else true |
+| `s._fail(kind)` | the trap, naming what kind means as write misuse | latch kind if healthy; returns false | the trap, as WriteStream |
+| `s._room(n)` | true; the trap if `bits + n > 8 * buffer.len()` | false if latched; latches `PastEnd` if `bits + n > 8 * data.len()` | true |
+| `s._trap(what)` | throws `serialize: write misuse: <what>` | (unused) | as WriteStream |
 | `s._put(value, n)` / `s._take(n)` | writes one group, n in [1,32] | returns one group, n in [1,32] | `_put` counts n |
 | `s._putBytes(data, offset, n)` / `s._takeBytes(dest, offset, n)` | n bytes, byte aligned | n bytes into dest, byte aligned | `_putBytes` counts 8n |
 | `s.alignBits()` | `(8 - bits % 8) % 8` | same | 7 |
 
-**The arm's shape**, in every family: (1) misuse checks, raising with
-serialize.go's panic text; (2) `if (!s._room(n)) return false;` for the whole
-width of the value, before any bit moves (a 64-bit value checks 64, then puts
-two groups); (3) the moves; (4) on read, every refusal latched with
-`s._fail(SerializeError.<reason>)`, and only after all of
-them the holder assigned; (5) `return true`. A read refused after its bits
+**The arm's shape**, in every family: (1) misuse checks, each the trap (a
+write or measure arm's `s._fail(...)` is the trap); (2) `if (!s._room(n))
+return false;` for the whole width of the value, before any bit moves (a
+64-bit value checks 64, then puts two groups; on a write it traps, never
+returns false); (3) the moves; (4) on read, every refusal latched with
+`s._fail(SerializeError.<reason>)`, and only after all of them the holder
+assigned; (5) `return true`. A read refused after its bits
 were taken keeps those bits counted, as serialize.go's does; the stream is
 terminal either way.
 
