@@ -13,7 +13,7 @@ local _M = vargv[0];
 local require = vargv[1];
 
 // THE REFUSAL REASONS (DESIGN.md (a), (g); STANDARD.md, Refusal reasons): the
-// closed list of eight, each value spelled exactly as STANDARD.md spells it, and
+// closed list of nine, each value spelled exactly as STANDARD.md spells it, and
 // serialize.go v2's Refusal sentinels. The FIRST refusal latches on the stream
 // and sticks: every later call fails with that same reason (its echoes keep
 // it), consumes nothing and leaves its holder and destination untouched
@@ -29,6 +29,7 @@ local SerializeError = {
   InvalidUtf8 = "invalid_utf8",
   EmbeddedNul = "embedded_nul",
   NonCanonical = "non_canonical",
+  Rejected = "rejected",
 };
 _M.SerializeError <- SerializeError;
 
@@ -143,16 +144,21 @@ class Stream {
 
   // serializeObject(object): object.serialize(stream) inline, no bytes of its
   // own (STANDARD.md object). A latched stream does not call it. Anything but
-  // true from the object fails the call; serialize.go latches the object's
-  // own error, and a Squirrel serializer returns a boolean, so a false that
-  // latched nothing latches ValueOutOfRange: the object refused its own value
-  // (DESIGN.md (a), the one deviation of the error model).
+  // true from the object fails the call, and a false that latched nothing
+  // latches Rejected through the same latch, so a primitive's earlier reason
+  // is kept (STANDARD.md, Refusal reasons, `rejected`; IMPLEMENTING.md U2).
   function serializeObject(object) {
     if (_error != null) return false;
     local r = object.serialize(this);
-    if (r != true) return _fail(SerializeError.ValueOutOfRange);
+    if (r != true) return _fail(SerializeError.Rejected);
     return _error == null;
   }
+
+  // reject(): the caller's own refusal (STANDARD.md, Refusal reasons,
+  // `rejected`; IMPLEMENTING.md U2). It is read only: on a write or a measure
+  // there is nothing to refuse, so it answers false and latches nothing (U9).
+  // ReadStream overrides it. Always false.
+  function reject() { return false; }
 }
 
 // WriteStream(buffer): writes into buffer, a blob whose length is a multiple
@@ -262,6 +268,10 @@ class ReadStream extends Stream {
     if (remaining > 0 && _take(remaining) != 0) return _fail(SerializeError.NonzeroPadding);
     return true;
   }
+
+  // reject(): latch Rejected through the same latch as a wire refusal, so the
+  // first reason wins and the stream is terminal from here on; always false
+  function reject() { return _fail(SerializeError.Rejected); }
 
   // _take(bits): one group of bits in [1,32], after _room
   function _take(bits) {

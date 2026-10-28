@@ -38,17 +38,20 @@ local parseHex = function(s) {
 
 // parseVectors(): parse a conformance file into records. Each record is a
 // table: op, name, bytes (an array), expect (a 32- or 64-bit integer, or null
-// when the record expects refusal), consumed, writer (bool).
+// when the record expects refusal), consumed, writer (bool). A `sequence`
+// record (the 2.1 sNaN-shaped neighbours) is skipped here: its value list is
+// not one pattern, and test/conformance runs it through the step machine.
 local parseVectors = function(root, name) {
   local lines = split(readText(root + "/conformance/" + name + ".txt"), "\n");
   local records = [];
   local cur = null;
   foreach (line in lines) {
     if (line.len() == 0 || line.slice(0, 1) == "#") {
-      if (line.len() == 0 && cur != null) { records.append(cur); cur = null; }
+      if (line.len() == 0 && cur != null) { if (cur.op != "sequence") records.append(cur); cur = null; }
       continue;
     }
     local words = split(line, " ");
+    if (cur != null && cur.op == "sequence") continue;
     if (cur == null) cur = { op = "", name = "", bytes = [], expect = null, reason = null, consumed = 0, writer = false };
     if (words[0] == "operation") cur.op = words[1];
     else if (words[0] == "name") cur.name = words[1];
@@ -63,7 +66,7 @@ local parseVectors = function(root, name) {
     else if (words[0] == "consumed") cur.consumed = words[1].tointeger();
     else if (words[0] == "writer") cur.writer = (words[1] == "canonical");
   }
-  if (cur != null) records.append(cur);
+  if (cur != null && cur.op != "sequence") records.append(cur);
   return records;
 };
 
@@ -195,7 +198,7 @@ function TestSerializeFloat() {
     print(file + " " + records.len() + " records\n");
     local expectCount = 0;
     local lines = split(readText(root + "/conformance/" + file + ".txt"), "\n");
-    foreach (line in lines) if (line.len() >= 9 && line.slice(0, 9) == "operation") expectCount++;
+    foreach (line in lines) if (line.len() >= 9 && line.slice(0, 9) == "operation" && line != "operation sequence") expectCount++;
     check(records.len() == expectCount, file + ": processed " + records.len() + ", file has " + expectCount);
 
     foreach (rec in records) {

@@ -103,12 +103,13 @@ function TestSmoke() {
     "serialize: the loader refuses serialize_../smoke", "a traversal name");
 
   // THE REFUSAL REASONS (STANDARD.md, Refusal reasons): exactly the closed
-  // list of eight, each spelled as the standard spells it, and None
+  // list of nine, each spelled as the standard spells it, and None
   local reasons = {
     PastEnd = "past_end", ValueOutOfRange = "value_out_of_range",
     NonzeroPadding = "nonzero_padding", TrailingData = "trailing_data",
     NonFiniteFloat = "non_finite_float", InvalidUtf8 = "invalid_utf8",
     EmbeddedNul = "embedded_nul", NonCanonical = "non_canonical",
+    Rejected = "rejected",
   };
   local kinds = 0;
   foreach (k, v in serialize.SerializeError) {
@@ -116,7 +117,7 @@ function TestSmoke() {
     if (k == "None") { check(v == null, "SerializeError.None is " + v); continue; }
     check(k in reasons && reasons[k] == v, "SerializeError." + k + " = " + v + " is not on the closed list");
   }
-  check(kinds == 9, "SerializeError has " + kinds + " kinds, want the eight reasons and None");
+  check(kinds == 10, "SerializeError has " + kinds + " kinds, want the nine reasons and None");
 
   // THE LATCH (DESIGN.md (g)): on a ReadStream over empty data a read of one
   // bit fails and latches PastEnd (STANDARD.md Reader Obligations); a later
@@ -138,9 +139,10 @@ function TestSmoke() {
   local refusing = { serialize = function(stream) { return false; } };
   check(rs.serializeObject(refusing) == false && rs.error() == serialize.SerializeError.PastEnd,
     "the first error did not stick");
-  // an object that refuses its own value latches ValueOutOfRange (DESIGN.md (a))
+  // an object that refuses its own value latches Rejected (STANDARD.md,
+  // Refusal reasons; IMPLEMENTING.md U2)
   local rs2 = serialize.ReadStream(blob(0));
-  check(rs2.serializeObject(refusing) == false && rs2.error() == serialize.SerializeError.ValueOutOfRange,
+  check(rs2.serializeObject(refusing) == false && rs2.error() == serialize.SerializeError.Rejected,
     "a refusing object latched " + rs2.error());
   check(rs2.serializeObject(later) == false && holder.value == 7, "the object latch is not terminal");
   // reset clears the latch

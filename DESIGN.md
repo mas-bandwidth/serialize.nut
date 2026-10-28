@@ -13,19 +13,19 @@ already decides.
 |---|---|
 | the reference | `mas-bandwidth/serialize.go` tag `v2.0.0` (`a3ffd9136906dfc4db5b2fb6d146181d749b00c5`, module `github.com/mas-bandwidth/serialize.go/v2`), read, never imported by the library (the fuzz differential imports it) |
 | the closest worked example | `mas-bandwidth/serialize.js` main at `ff765a1a89a89dc3f6e818e553baabf189241b4e` (`src/index.js`, `src/streams.js`), read, never imported |
-| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.0.1` (`b812b75cc0a75dd925af74103ab1f155b9431ac1`: format 2.0 unchanged, the corpus adds read terminality across a nested object, `3f40cb5f`; `tools/revendor.sh <tag>` re-vendors them) |
+| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.1.0` (`884bc3098c9619d67308d9c6b5cdf38593d98b69`: format 2.0 unchanged; standard 2.1 adds the `rejected` refusal reason, the `reject` step and the U1-U16 rules of IMPLEMENTING.md; `tools/revendor.sh <tag>` re-vendors them) |
 | the number, byte, float32 and loading rules | `mas-bandwidth/schema` `docs/PORT-SQUIRREL.md` at `f676cb9adc8a653abcdce38034e99ec3c3aad6b8` (branch `sprint/schema-squirrel-port-design.w1.g1.e21`), restated in (c) to (f) with no change of substance |
 | the interpreter | Squirrel 3.2, built `sq64` with `-DSQUSEDOUBLE` (`make dist-squirrel`) |
 
 **The vendored copies are the reference's copies.** `diff -r` of this
 repository's `STANDARD.md`, `IMPLEMENTING.md`, `conformance/` and
-`conformance-controls/` against serialize v2.0.1's is empty (the corpus job in
+`conformance-controls/` against serialize v2.1.0's is empty (the corpus job in
 CI holds them to it), so the Go oracle and this port read the same 18 vector
 files and the same standard, byte for byte.
 
 **Format 2.0** (STANDARD.md, Format version): the wire carries only integers
 and bytes, and every value has exactly one encoding. Against format 1.1 this
-port: refuses for one of eight named reasons (a); carries finite floats and
+port: refuses for one of nine named reasons (a, `rejected` since standard 2.1); carries finite floats and
 doubles only (e); refuses a compressed float decode that is not finite (e);
 refuses the int_relative absolute tier carrying a bounded difference; refuses a
 string's zero byte before its encoding, each for its own reason; has
@@ -56,7 +56,7 @@ untouched on failure.
 failure; the failure's kind is `stream.error()`. Go returns `error`, JS
 returns a boolean; this is JS's model.
 
-**The refusal reasons** are STANDARD.md's closed list of eight ("Refusal
+**The refusal reasons** are STANDARD.md's closed list of nine ("Refusal
 reasons"), each value spelled exactly as the standard spells it, and
 serialize.go v2's `Refusal` sentinels, latched on the stream:
 
@@ -71,6 +71,7 @@ serialize.go v2's `Refusal` sentinels, latched on the stream:
 | `InvalidUtf8` (`"invalid_utf8"`) | `ErrInvalidUTF8` | a string payload that is not well-formed UTF-8 |
 | `EmbeddedNul` (`"embedded_nul"`) | `ErrEmbeddedNul` | a zero byte among a string's bytes, checked before the encoding |
 | `NonCanonical` (`"non_canonical"`) | `ErrNonCanonical` | the int_relative absolute tier carrying a difference a bounded tier carries |
+| `Rejected` (`"rejected"`) | (none in serialize.go v2.0.0) | the caller's own refusal: `ReadStream.reject()`, or a nested object whose `serialize` returns anything but `true` with nothing latched (STANDARD.md 2.1; IMPLEMENTING.md U2). `reject()` on a write or a measure answers false and latches nothing |
 
 The FIRST refusal sticks: every later call fails with that same reason (its
 echoes keep it), consumes nothing and writes nothing to its holder or
@@ -200,7 +201,8 @@ write data
 - `serializeObject`: serialize.go latches the error the object returns. A
   Squirrel serializer returns a boolean, so an object that returns anything
   but `true` fails the call, and when it latched nothing itself the stream
-  latches `ValueOutOfRange`: the object refused its own value.
+  latches `Rejected` (STANDARD.md 2.1, "Refusal reasons"; it latched
+  `ValueOutOfRange` before 2.1).
 
 ## (b) BIT ORDER AND ENDIANNESS
 

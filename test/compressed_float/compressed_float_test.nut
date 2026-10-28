@@ -144,7 +144,7 @@ function TestSerializeCompressedFloat() {
   // (1) the corpus
   local corpusText = readText(root + "/conformance/compressed_float.txt");
   local records = parseRecords(corpusText);
-  local expectedCount = 36;
+  local expectedCount = 37;
   print("record count " + records.len() + "\n");
   check(records.len() == expectedCount,
     "the corpus has " + records.len() + " records, want " + expectedCount);

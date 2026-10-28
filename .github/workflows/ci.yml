@@ -6,7 +6,7 @@
 # either the URL or the sha256; the cache key is derived from the pin itself.
 #
 # DESIGN.md's pins table makes STANDARD.md, IMPLEMENTING.md, conformance/ and
-# conformance-controls/ VERBATIM copies of mas-bandwidth/serialize tag v2.0.1
+# conformance-controls/ VERBATIM copies of mas-bandwidth/serialize tag v2.1.0
 # (tools/revendor.sh re-vendors them). The corpus job below holds them to that
 # release, never to main: an upstream merge mid-day must not change what a
 # commit's CI proves. Bump the tag family-wide, deliberately.
@@ -82,7 +82,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet, serialize]
     env:
-      SERIALIZE_TAG: v2.0.1
+      SERIALIZE_TAG: v2.1.0
     steps:
       - uses: actions/checkout@v4
 
