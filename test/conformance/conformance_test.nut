@@ -607,7 +607,11 @@ runSteps = function(stream, steps, from, to, state) {
 local splitExpect = function(text) {
   local parts = split(text, "|");
   local out = [];
+  // split drops an empty LAST piece, and the line parser has trimmed the blank of
+  // an empty entry (an empty string): a list that ends with the separator has an
+  // empty entry there
   foreach (p in parts) out.append(strip(p));
+  if (text.len() > 0 && text[text.len() - 1] == '|') out.append("");
   return out;
 };
 
@@ -1005,6 +1009,39 @@ function TestConformanceCorpus() {
     total += recs.len();
   }
   print("corpus: " + files.len() + " files, " + total + " records\n");
+
+  // EXTRA CORPUS DIRECTORIES: an ordinary run also reads conformance-regress/
+  // (this port's fixed regression vectors) and every directory of
+  // SERIALIZE_CORPUS_EXTRA_DIR (':'-separated; relative paths are the repository
+  // root's). The records are run and counted but NEVER join `corpus`, which the
+  // controls below sweep: a control names exactly the vectors its sabotaged
+  // reader must fail, so a file added beside the corpus would trip it.
+  local extraDirs = [[root + "/conformance-regress", false]];
+  local extraEnv = getenv("SERIALIZE_CORPUS_EXTRA_DIR");
+  if (extraEnv != null && extraEnv != "") {
+    foreach (d in split(extraEnv, ":")) extraDirs.append([d[0] == '/' ? d : root + "/" + d, true]);
+  }
+  local extraIndex = 0;
+  foreach (xd in extraDirs) {
+    extraIndex++;
+    local present = system("test -d '" + xd[0] + "'") == 0;
+    check(present || !xd[1], "SERIALIZE_CORPUS_EXTRA_DIR " + xd[0] + " is not a directory");
+    if (!present) continue;
+    local xfiles = listDir(root, xd[0], ".txt", "extra-listing-" + extraIndex + ".txt");
+    check(xfiles.len() > 0 || !xd[1], "SERIALIZE_CORPUS_EXTRA_DIR " + xd[0] + " holds no *.txt");
+    foreach (f in xfiles) {
+      check(files.find(f) == null, f + ": an extra corpus file is named like a corpus file");
+      local recs = parseRecords(readText(xd[0] + "/" + f));
+      foreach (rec in recs) {
+        check(!(rec.name in names), f + ": the vector name " + rec.name + " is also in " + (rec.name in names ? names[rec.name] : ""));
+        names[rec.name] <- f;
+      }
+      runRecords(serialize, recs);
+      print(f + " (extra): " + recs.len() + " records\n");
+      total += recs.len();
+    }
+  }
+  print("corpus and extra: " + total + " records\n");
 
   // CONTROL: a corpus file whose operation has no runner is REJECTED, never
   // skipped: the reference's own control file, and a scratch file spelling the
