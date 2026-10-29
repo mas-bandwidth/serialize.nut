@@ -607,10 +607,9 @@ runSteps = function(stream, steps, from, to, state) {
 local splitExpect = function(text) {
   local parts = split(text, "|");
   local out = [];
-  // split drops an empty first or last piece, and the line parser has trimmed the
-  // blank of an empty entry (an empty string): a list that starts or ends with the
-  // separator has an empty entry there
-  if (text.len() > 0 && text[0] == '|') out.append("");
+  // split drops an empty LAST piece, and the line parser has trimmed the blank of
+  // an empty entry (an empty string): a list that ends with the separator has an
+  // empty entry there
   foreach (p in parts) out.append(strip(p));
   if (text.len() > 0 && text[text.len() - 1] == '|') out.append("");
   return out;
