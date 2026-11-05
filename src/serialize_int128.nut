@@ -198,7 +198,9 @@ write.serializeInt128 <- function(s, h, min, max) {
 // raise (IMPLEMENTING.md U7, U16)
 read.serializeInt128 <- function(s, h, min, max) {
   if (s._error != null) return false;
-  if (i128cmp(min, max) > 0) return s._fail(SerializeError.ValueOutOfRange);
+  if (typeof min != "array" || min.len() != 2 || typeof min[0] != "integer" || typeof min[1] != "integer" ||
+      typeof max != "array" || max.len() != 2 || typeof max[0] != "integer" || typeof max[1] != "integer" ||
+      i128cmp(min, max) > 0) return s._fail(SerializeError.ValueOutOfRange);
   local numBits = u128len(u128sub(max, min));
   if (numBits == 0) { h.value = [min[0], min[1]]; return true; }
   if (!s._room(numBits)) return false;

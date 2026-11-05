@@ -1651,3 +1651,81 @@ for (local i = 0; i < iters; i++) {
 		})
 	}
 }
+
+// The read-declaration audit extends the same Squirrel driver. Declarations
+// are caller inputs, so Go's statically typed bounds are not the oracle here.
+// The invariant is refusal before any new bit or holder assignment, with the
+// first reason retained even for zero-bit calls after the refusal (sra-nut-1).
+func readAuditRuntime(t *testing.T) (string, string, string) {
+	t.Helper()
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sq := os.Getenv("SQ")
+	if sq == "" {
+		sq = filepath.Join(root, "dist", "squirrel-3.2", "bin", "sq")
+	}
+	if fi, err := os.Stat(sq); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+		t.Fatalf("the pinned interpreter SQ=%s does not resolve; run make dist-squirrel", sq)
+	}
+	return sq, root, filepath.Join(root, "fuzz", "driver.nut")
+}
+
+func TestReadIntegerDeclarationSeeds(t *testing.T) {
+	t.Parallel()
+	sq, root, driver := readAuditRuntime(t)
+	rng := rand.New(rand.NewPCG(0x20261105, 0x7372616e757431))
+	var reqs []request
+	for family := 0; family < 5; family++ {
+		for bad := 0; bad < 11; bad++ {
+			for side := 0; side < 3; side++ {
+				for _, prefix := range []int{0, 1, 7, 8, 31, 32, 33, 63} {
+					for failed := 0; failed < 2; failed++ {
+						data := make([]byte, 32)
+						for i := range data {
+							data[i] = byte(rng.Uint32())
+						}
+						id := fmt.Sprintf("d%d", len(reqs))
+						reqs = append(reqs, request{id, fmt.Sprintf("d %s %d %d %d %d %d %s", id,
+							family, bad, side, prefix, failed, hexBytes(data))})
+					}
+				}
+			}
+		}
+	}
+	out := runDriver(t, sq, root, driver, 0, reqs)
+	for _, q := range reqs {
+		if got := strings.Join(out[q.id], " "); got != q.id+" d ok" {
+			t.Fatalf("declaration seed %s: got %q", q.line, got)
+		}
+	}
+	t.Logf("read declaration audit: %d cases, seed 0x20261105, no bits or holders changed", len(reqs))
+}
+
+func FuzzReadIntegerDeclarations(f *testing.F) {
+	// Retained seeds cover each family, a fractional degenerate declaration,
+	// short/ill-typed wide carriers, huge Q widths and an already-failed stream.
+	for _, seed := range [][]byte{
+		{0, 0, 2, 0, 0}, {1, 0, 2, 63, 0}, {2, 0, 0, 31, 0},
+		{2, 3, 1, 32, 0}, {3, 8, 0, 1, 0}, {3, 9, 1, 7, 1},
+		{4, 10, 2, 33, 0}, {4, 2, 2, 8, 1},
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, seed []byte) {
+		t.Parallel()
+		if len(seed) < 5 {
+			return
+		}
+		sq, root, driver := readAuditRuntime(t)
+		data := make([]byte, 32)
+		copy(data, seed[5:])
+		q := request{"audit", fmt.Sprintf("d audit %d %d %d %d %d %s",
+			seed[0]%5, seed[1]%11, seed[2]%3, seed[3]%64, seed[4]%2, hexBytes(data))}
+		out := runDriver(t, sq, root, driver, 0, []request{q})
+		if got := strings.Join(out[q.id], " "); got != "audit d ok" {
+			t.Fatalf("declaration seed %x: got %q", seed, got)
+		}
+	})
+}

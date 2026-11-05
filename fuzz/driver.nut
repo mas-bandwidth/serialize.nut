@@ -15,6 +15,8 @@
 //   w <id> <capacity> <program>   write the program into a blob of <capacity>
 //                                 bytes (a multiple of 8, DESIGN.md (d))
 //   r <id> x<hex> <program>       read the program's steps from those bytes
+//   d <id> <family> <bad> <side> <prefix> <failed> x<hex>
+//                                 pin caller declaration refusals (sra-nut-1)
 //
 // THE ANSWERS.
 //
@@ -370,6 +372,51 @@ local kindOf = function(stream, st) {
   return st.touched ? "touched:" + k : k;
 };
 
+// The declaration audit uses a closed set of caller values, never executable
+// request text. Packet bytes vary independently: none may make a bad integer
+// declaration succeed or move the cursor. This is a port contract check, not
+// a differential against Go's statically typed bounds.
+local auditDeclaration = function(family, bad, side, prefix, failed, data) {
+  local rs = serialize.ReadStream(data);
+  if (prefix > 32) {
+    if (!rs.serializeBits({ value = 0 }, 32)) throw "audit: missing prefix";
+    prefix -= 32;
+  }
+  if (prefix > 0 && !rs.serializeBits({ value = 0 }, prefix)) throw "audit: missing prefix";
+  if (failed) rs.fail("past_end");
+  local before = rs.bitsProcessed();
+  local values = [0.5, 0.0, null, "0", true, [], {}, [0]];
+  local invalid = values[bad % values.len()];
+  local lo = 0, hi = 7;
+  if (family == 2) {
+    lo = [0, 0]; hi = [7, 0];
+    local pairs = [[], [0], [0, 0, 0], [0.5, 0], [0, null], null, 0, {}];
+    invalid = pairs[bad % pairs.len()];
+  }
+  if (side != 1) lo = invalid;
+  if (side != 0) hi = invalid;
+  local ib = family == 3 ? 32 : 64;
+  local fb = ib;
+  if (family >= 3 && bad >= 8) {
+    lo = 0; hi = 1;
+    ib = bad == 9 ? 1 : 0x7fffffffffffffff;
+    fb = bad == 8 ? 1 : 0x7fffffffffffffff;
+  }
+  local h = { value = "untouched" };
+  local ok;
+  if (family == 0) ok = rs.serializeInt(h, lo, hi);
+  else if (family == 1) ok = rs.serializeInt64(h, lo, hi);
+  else if (family == 2) ok = rs.serializeInt128(h, lo, hi);
+  else if (family == 3) ok = rs.serializeFixed64(h, ib, fb, lo, hi);
+  else ok = rs.serializeFixed128(h, ib, fb, lo, hi);
+  local reason = failed ? "past_end" : "value_out_of_range";
+  if (ok != false || rs.error() != reason || rs.bitsProcessed() != before || h.value != "untouched")
+    throw "audit: invalid integer declaration did not refuse without changing output";
+  if (rs.serializeInt(h, 0, 0) || rs.serializeBytes(blob(0)) || rs.serializeEnd() ||
+      rs.error() != reason || rs.bitsProcessed() != before || h.value != "untouched")
+    throw "audit: integer declaration refusal is not terminal";
+};
+
 // --- the requests ------------------------------------------------------------
 local count = 0;
 while (cur.p < N) {
@@ -405,6 +452,11 @@ while (cur.p < N) {
     }
     for (local j = 0; j < n; j++) print(" " + st.vals[j]);
     print("\n");
+  } else if (op == "d") {
+    local family = dec(), bad = dec(), side = dec(), prefix = dec(), failed = dec();
+    local data = xblob();
+    auditDeclaration(family, bad, side, prefix, failed != 0, data);
+    print(id + " d ok\n");
   } else throw "driver: no request " + op;
   count++;
 }

@@ -97,7 +97,8 @@ write.serializeInt <- function(s, h, min, max) {
 // U16).
 read.serializeInt <- function(s, h, min, max) {
   if (s._error != null) return false;
-  if (min < INT32_MIN || max > INT32_MAX || min > max) return s._fail(SerializeError.ValueOutOfRange);
+  if (typeof min != "integer" || typeof max != "integer" ||
+      min < INT32_MIN || max > INT32_MAX || min > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired32(min, max);
   if (bits == 0) { h.value = min; return true; }
   if (!s._room(bits)) return false;
@@ -144,7 +145,7 @@ write.serializeInt64 <- function(s, h, min, max) {
 
 read.serializeInt64 <- function(s, h, min, max) {
   if (s._error != null) return false;
-  if (min > max) return s._fail(SerializeError.ValueOutOfRange);
+  if (typeof min != "integer" || typeof max != "integer" || min > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired64(min, max);
   if (bits == 0) { h.value = min; return true; }
   if (!s._room(bits)) return false;

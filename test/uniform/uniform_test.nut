@@ -419,3 +419,78 @@ function TestU15Exports() {
   foreach (k, v in serialize) check(k in allowed, "the API table exports " + k + ", which U15 does not allow");
   foreach (k, v in allowed) check(k in serialize, "the API table lacks " + k);
 }
+
+// sra-nut-1: declarations are caller inputs, not bytes decoded by the reader.
+// Validate their types before comparison, indexing, arithmetic or a zero-bit
+// success. A bad declaration refuses without publishing a fractional value.
+local readIntegerDeclarationAudit = function(family) {
+  local serialize = load();
+  local reads = [];
+  foreach (bad in [ 0.5, 0.0, null, "0", true, [], {} ]) {
+    local value = bad;
+    foreach (which in [ "min", "max", "both" ]) {
+      local side = which;
+      reads.append({ what = "int " + side + " " + typeof value,
+        call = function(rs, h) { return rs.serializeInt(h, side == "max" ? 0 : value, side == "min" ? 7 : value); } });
+      reads.append({ what = "int64 " + side + " " + typeof value,
+        call = function(rs, h) { return rs.serializeInt64(h, side == "max" ? 0 : value, side == "min" ? 7 : value); } });
+      reads.append({ what = "fixed64 " + side + " " + typeof value,
+        call = function(rs, h) { return rs.serializeFixed64(h, 32, 32, side == "max" ? 0 : value, side == "min" ? 7 : value); } });
+      reads.append({ what = "fixed128 " + side + " " + typeof value,
+        call = function(rs, h) { return rs.serializeFixed128(h, 64, 64, side == "max" ? 0 : value, side == "min" ? 7 : value); } });
+    }
+  }
+  foreach (bad in [ null, 0, [], [0], [0, 0, 0], [0.5, 0], [0, null], { value = 0 } ]) {
+    local value = bad;
+    foreach (which in [ "min", "max", "both" ]) {
+      local side = which;
+      reads.append({ what = "int128 " + side + " " + typeof value,
+        call = function(rs, h) { return rs.serializeInt128(h, side == "max" ? [0, 0] : value, side == "min" ? [7, 0] : value); } });
+    }
+  }
+  foreach (widths in [ [0x7fffffffffffffff, 1], [1, 0x7fffffffffffffff], [0x7fffffffffffffff, 0x7fffffffffffffff] ]) {
+    local pair = widths;
+    reads.append({ what = "fixed64 huge widths",
+      call = function(rs, h) { return rs.serializeFixed64(h, pair[0], pair[1], 0, 1); } });
+    reads.append({ what = "fixed128 huge widths",
+      call = function(rs, h) { return rs.serializeFixed128(h, pair[0], pair[1], 0, 1); } });
+  }
+  foreach (r in reads) {
+    if (r.what.find(family + " ") != 0) continue;
+    foreach (failed in [ false, true ]) {
+      local rs = serialize.ReadStream(blob(32));
+      check(rs.serializeBits({ value = 0 }, 3), "audit prefix");
+      if (failed) rs.fail("past_end");
+      local h = { value = "untouched" };
+      local got = null, raised = null;
+      try { got = r.call(rs, h); } catch (e) { raised = e; }
+      check(raised == null, r.what + ": read raised " + raised);
+      local reason = failed ? "past_end" : "value_out_of_range";
+      check(got == false && rs.error() == reason, r.what + ": not refused as " + reason);
+      check(rs.bitsProcessed() == 3 && h.value == "untouched", r.what + ": changed bits or holder");
+      check(!rs.serializeInt({ value = 0 }, 0, 0) && !rs.serializeEnd(), r.what + ": refusal not terminal");
+      check(rs.error() == reason && rs.bitsProcessed() == 3, r.what + ": terminal state changed");
+    }
+  }
+};
+
+function TestReadIntegerDeclarationAuditInt32() { readIntegerDeclarationAudit("int"); }
+function TestReadIntegerDeclarationAuditInt64() { readIntegerDeclarationAudit("int64"); }
+function TestReadIntegerDeclarationAuditInt128() { readIntegerDeclarationAudit("int128"); }
+function TestReadIntegerDeclarationAuditFixed64() { readIntegerDeclarationAudit("fixed64"); }
+function TestReadIntegerDeclarationAuditFixed128() { readIntegerDeclarationAudit("fixed128"); }
+
+local readFixedWidthAudit = function(wide) {
+  local serialize = load();
+  foreach (widths in [ [0x7fffffffffffffff, 1], [1, 0x7fffffffffffffff], [0x7fffffffffffffff, 0x7fffffffffffffff] ]) {
+    local rs = serialize.ReadStream(blob(32));
+    local h = { value = "untouched" };
+    local ok = wide ? rs.serializeFixed128(h, widths[0], widths[1], 0, 1) :
+      rs.serializeFixed64(h, widths[0], widths[1], 0, 1);
+    check(!ok && rs.error() == "value_out_of_range" && rs.bitsProcessed() == 0 && h.value == "untouched",
+      "fixed width sum must be bounded before addition");
+  }
+};
+
+function TestReadFixed64WidthAudit() { readFixedWidthAudit(false); }
+function TestReadFixed128WidthAudit() { readFixedWidthAudit(true); }
