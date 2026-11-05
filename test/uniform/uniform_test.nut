@@ -10,6 +10,9 @@
 //                                  value_out_of_range before any bit moves,
 //                                  never raises, and a failed stream keeps its
 //                                  first reason (U7, U16)
+//   TestU7ReadDeclarationTypes     a read's declaration of the wrong type or
+//                                  shape, or with an oversized Q width, refuses
+//                                  value_out_of_range before any arithmetic
 //   TestU8OverWideWrite            a value wider than its bits traps on
 //                                  write, never masked (U8, U9)
 //   TestU10WholeOperationRoom      bytes and string write nothing ahead of a
@@ -124,6 +127,82 @@ function TestU7ReadNeverTraps() {
     try { got = r.call(rf, { value = 0 }); } catch (e) { raised = e; }
     check(raised == null && got == false && rf.error() == "past_end", r.what + ": a failed stream's reason became " + rf.error());
   }
+}
+
+// A read's declaration is checked for its type, its carrier shape and its Q
+// widths before any arithmetic: a float, an equal pair of floats, a value of
+// another type, a malformed 128-bit carrier or an oversized width refuses
+// value_out_of_range, whether the stream is healthy or already refused, and
+// leaves the holder, the first reason and the bit count unchanged.
+function TestU7ReadDeclarationTypes() {
+  local serialize = load();
+  local big = 0x7FFFFFFFFFFFFFFF;
+  local cases = [];
+  local add = function(what, call) { cases.append({ what = what, call = call }); };
+
+  foreach (b in [ [1.5, 1.5], [0.5, 3.5], [0, 3.5], [0.0, 0.0], [null, null], [null, 3], [3, null], ["a", "a"], ["1", "2"], [true, true], [[1], [2]], [{}, {}] ]) {
+    local d = b;
+    add("int32 " + typeof d[0] + "/" + typeof d[1] + " " + d[0] + " " + d[1], function(rs, h) { return rs.serializeInt(h, d[0], d[1]); });
+    add("int64 " + typeof d[0] + "/" + typeof d[1] + " " + d[0] + " " + d[1], function(rs, h) { return rs.serializeInt64(h, d[0], d[1]); });
+    add("fixed64 bounds " + typeof d[0] + "/" + typeof d[1] + " " + d[0] + " " + d[1], function(rs, h) { return rs.serializeFixed64(h, 8, 8, d[0], d[1]); });
+    add("fixed128 bounds " + typeof d[0] + "/" + typeof d[1] + " " + d[0] + " " + d[1], function(rs, h) { return rs.serializeFixed128(h, 64, 64, d[0], d[1]); });
+  }
+  foreach (b in [ [[1.5, 0], [1.5, 0]], [[0, 1.5], [0, 1.5]], [[0, 0], [2.5, 0]], [null, null], [[0, 0], null], ["ab", "ab"], [[1], [1]], [[1, 2, 3], [1, 2, 3]], [[], []],
+      [["a", 0], ["a", 0]], [[0, null], [0, null]], [[0, true], [0, true]], [{ a = 1 }, { a = 1 }], [[0, 0], [1]], [7, 7] ]) {
+    local d = b;
+    add("int128 " + typeof d[0] + "/" + typeof d[1], function(rs, h) { return rs.serializeInt128(h, d[0], d[1]); });
+  }
+  foreach (q in [ [big, big], [big, 1], [1, big], [-big, 1], [1, -big], [-big - 1, big], [0x4000000000000000, 0x4000000000000000],
+      [65, 0], [0, 65], [64, 65], [1000, 1000], [8.5, 8], [8, 8.5], [null, 8], [8, null], ["8", 8], [8, "8"], [true, 8], [[8], 8] ]) {
+    local d = q;
+    add("fixed64 Q " + d[0] + "/" + d[1], function(rs, h) { return rs.serializeFixed64(h, d[0], d[1], 0, 1); });
+  }
+  foreach (q in [ [big, big], [big, 1], [1, big], [-big, 1], [1, -big], [-big - 1, big], [0x4000000000000000, 0x4000000000000000],
+      [129, 0], [0, 129], [64, 65], [1000, 1000], [64.5, 64], [64, 64.5], [null, 64], [64, null], ["64", 64], [64, "64"], [true, 64], [[64], 64] ]) {
+    local d = q;
+    add("fixed128 Q " + d[0] + "/" + d[1], function(rs, h) { return rs.serializeFixed128(h, d[0], d[1], 0, 1); });
+  }
+
+  foreach (c in cases) {
+    local isWide = c.what.slice(0, 6) == "int128" || c.what.slice(0, 8) == "fixed128";
+    local sentinel = isWide ? [ "untouched", "untouched" ] : "untouched";
+    local holder = function() { return { value = sentinel }; };
+    local same = function(h) { return h.value == sentinel; };
+
+    local rs = serialize.ReadStream(blob(16));
+    local h = holder();
+    local got = null;
+    local raised = null;
+    try { got = c.call(rs, h); } catch (e) { raised = e; }
+    check(raised == null, c.what + ": the read raised " + raised);
+    check(got == false && rs.error() == "value_out_of_range", c.what + ": answered " + got + " with reason " + rs.error());
+    check(rs.bitsProcessed() == 0 && same(h), c.what + ": bits moved or the holder changed");
+
+    // the failure state first: a failed stream keeps its first reason
+    local rf = serialize.ReadStream(blob(0));
+    rf.serializeBool({ value = false });
+    local before = rf.bitsProcessed();
+    h = holder();
+    raised = null;
+    try { got = c.call(rf, h); } catch (e) { raised = e; }
+    check(raised == null && got == false && rf.error() == "past_end", c.what + ": a failed stream's reason became " + rf.error() + " (raised " + raised + ")");
+    check(rf.bitsProcessed() == before && same(h), c.what + ": a failed stream's bits or holder changed");
+  }
+
+  // the declarations that stay legal still read
+  local rs = serialize.ReadStream(blob(16));
+  local h = { value = 99 };
+  check(rs.serializeInt(h, 5, 5) && h.value == 5 && rs.bitsProcessed() == 0, "an equal integer pair is a zero-bit read");
+  h = { value = 99 };
+  check(rs.serializeInt64(h, -7, -7) && h.value == -7, "an equal int64 pair is a zero-bit read");
+  h = { value = null };
+  check(rs.serializeInt128(h, [3, 0], [3, 0]) && h.value[0] == 3 && h.value[1] == 0, "an equal int128 pair is a zero-bit read");
+  h = { value = 99 };
+  check(rs.serializeFixed64(h, 8, 8, 1, 1) && h.value == (1 << 8), "an equal fixed64 pair is a zero-bit read");
+  h = { value = null };
+  check(rs.serializeFixed128(h, 64, 64, 1, 1) && h.value[0] == 0 && h.value[1] == 1, "an equal fixed128 pair is a zero-bit read");
+  h = { value = 99 };
+  check(rs.serializeInt(h, 0, 15) && h.value == 0 && rs.bitsProcessed() == 4, "a ranged int32 still reads");
 }
 
 function TestU8OverWideWrite() {

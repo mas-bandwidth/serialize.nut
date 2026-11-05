@@ -15,12 +15,20 @@
 //   w <id> <capacity> <program>   write the program into a blob of <capacity>
 //                                 bytes (a multiple of 8, DESIGN.md (d))
 //   r <id> x<hex> <program>       read the program's steps from those bytes
+//   d <id> <h|f> <kind> <arg>...  one ranged read whose declaration is spelled
+//                                 as typed tokens (see THE DECLARATION TOKENS)
+//                                 on a healthy stream (h, 16 zero bytes) or on
+//                                 a stream already refused with past_end (f)
 //
 // THE ANSWERS.
 //
 //   <id> w ok x<hex>                          the flushed data()
 //   <id> r ok <bits> <v0> ... <vn-1>          bitsProcessed() and every value
 //   <id> <w|r> refused <i> <kind> <v0> ... <vi-1>
+//   <id> d <ok|refused|raised> <error|none> <bits> <held|touched>
+//                                             the answer, error(), bitsProcessed()
+//                                             and whether the holder kept its
+//                                             sentinel
 //                                             the refusing step, error(), and on
 //                                             a read the values decoded before it
 //
@@ -43,6 +51,11 @@
 //   int_relative PREV N  float N  double N  cfloat MIN MAX RES N
 //   cfloatpre MIN MAX RES N  bytes xHEX  string <buffer> xHEX
 //   align  end  object <span>
+//
+// THE DECLARATION TOKENS (d requests): i<dec> an integer, f<text> a float,
+// s<text> a string, n null, b true, and a<tok>,<tok>... an array of these
+// tokens (a alone is the empty array). The kinds are int, int64, int128
+// (<min> <max>) and fixed64, fixed128 (<ib> <fb> <min> <max>).
 //
 // `object <span>` serializes the next <span> steps inside serializeObject
 // (STANDARD.md object). A value token is ignored on a read.
@@ -186,6 +199,32 @@ local printBlob = function(b) {
     if (piece.len() >= 128) { print(piece); piece = ""; }
   }
   print(piece);
+};
+
+// --- the declaration tokens (d requests) -----------------------------------
+local declSimple = function(t) {
+  local c = t[0];
+  local rest = t.slice(1);
+  if (c == 'i') return rest.tointeger();
+  if (c == 'f') return rest.tofloat();
+  if (c == 's') return rest;
+  if (c == 'n') return null;
+  if (c == 'b') return true;
+  throw "driver: no declaration token " + t;
+};
+local declToken = function(t) {
+  if (t[0] != 'a') return declSimple(t);
+  local out = [];
+  local rest = t.slice(1);
+  if (rest.len() == 0) return out;
+  local start = 0;
+  for (local i = 0; i <= rest.len(); i++) {
+    if (i == rest.len() || rest[i] == ',') {
+      out.append(declSimple(rest.slice(start, i)));
+      start = i + 1;
+    }
+  }
+  return out;
 };
 
 // --- the program -------------------------------------------------------------
@@ -405,6 +444,29 @@ while (cur.p < N) {
     }
     for (local j = 0; j < n; j++) print(" " + st.vals[j]);
     print("\n");
+  } else if (op == "d") {
+    local state = word();
+    local kind = word();
+    local args = [];
+    while (!atEol()) args.append(declToken(word()));
+    local rs = serialize.ReadStream(state == "h" ? blob(16) : blob(0));
+    if (state == "f") rs.serializeBool({ value = false });
+    local wide = kind == "int128" || kind == "fixed128";
+    local h = { value = wide ? [SENTINEL, SENTINEL] : SENTINEL };
+    local ok = null;
+    local raised = false;
+    try {
+      if (kind == "int") ok = rs.serializeInt(h, args[0], args[1]);
+      else if (kind == "int64") ok = rs.serializeInt64(h, args[0], args[1]);
+      else if (kind == "int128") ok = rs.serializeInt128(h, args[0], args[1]);
+      else if (kind == "fixed64") ok = rs.serializeFixed64(h, args[0], args[1], args[2], args[3]);
+      else if (kind == "fixed128") ok = rs.serializeFixed128(h, args[0], args[1], args[2], args[3]);
+      else throw "driver: no declaration kind " + kind;
+    } catch (e) { raised = true; }
+    local held = wide ? (h.value.len() == 2 && h.value[0] == SENTINEL && h.value[1] == SENTINEL) : h.value == SENTINEL;
+    local e = rs.error();
+    print(id + " d " + (raised ? "raised" : (ok ? "ok" : "refused")) + " " + (e == null ? "none" : e) + " " +
+      rs.bitsProcessed() + " " + (held ? "held" : "touched") + "\n");
   } else throw "driver: no request " + op;
   count++;
 }
