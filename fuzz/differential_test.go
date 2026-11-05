@@ -1651,3 +1651,230 @@ for (local i = 0; i < iters; i++) {
 		})
 	}
 }
+
+// TestReadIntegerDeclarationSeeds: a ranged integer or fixed read whose
+// declaration has the wrong type, the wrong carrier shape or an oversized Q
+// width refuses value_out_of_range before any bit moves, never raises, and
+// leaves the holder and the cursor alone, on a healthy stream and on one
+// already refused (which keeps its first reason). The declarations are drawn
+// from a fixed seed (no clock); serialize.go's reader is the oracle for the
+// valid control declarations interleaved with them.
+func TestReadIntegerDeclarationSeeds(t *testing.T) {
+	t.Parallel()
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sq := os.Getenv("SQ")
+	if sq == "" {
+		sq = filepath.Join(root, "dist", "squirrel-3.2", "bin", "sq")
+	}
+	if fi, err := os.Stat(sq); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+		t.Fatalf("the pinned interpreter SQ=%s does not resolve; run make dist-squirrel", sq)
+	}
+	driver := filepath.Join(root, "fuzz", "driver.nut")
+
+	r := rand.New(rand.NewPCG(0x1d3c1a7a, 0x5eed5eed))
+	pick := func(xs []string) string { return xs[r.IntN(len(xs))] }
+
+	// bad scalar tokens for a bound or a width, and bad 128-bit carriers
+	badScalar := []string{"f1.5", "f0.5", "f-2.25", "f3.0", "sx", "s1", "n", "b", "a", "ai1", "ai1,i2", "af1"}
+	badCarrier := []string{"a", "ai1", "ai1,i2,i3", "af1.5,i0", "ai0,f1.5", "ai1,n", "ai1,sx", "ai1,b", "n", "sx", "i5", "f1.5", "b"}
+	hugeWidth := []string{"i9223372036854775807", "i4611686018427387904", "i-9223372036854775807", "i1000", "i-1", "i65", "i129"}
+
+	type decl struct {
+		name   string
+		kind   string
+		args   []string
+		valid  bool
+		expect *step // the oracle step of a valid declaration
+	}
+	var decls []decl
+
+	for i := 0; i < 60; i++ {
+		lo := int64(r.IntN(2001) - 1000)
+		hi := lo + int64(r.IntN(1001))
+		for _, kind := range []string{"int", "int64"} {
+			good := []string{fmt.Sprintf("i%d", lo), fmt.Sprintf("i%d", hi)}
+			decls = append(decls, decl{name: kind + " valid", kind: kind, args: good, valid: true,
+				expect: &step{kind: kind, min: serialize.Int128From64(lo), max: serialize.Int128From64(hi)}})
+			bad := []string{pick(badScalar), pick(badScalar)}
+			switch r.IntN(4) {
+			case 0:
+				bad[1] = good[1]
+			case 1:
+				bad[0] = good[0]
+			case 2:
+				f := pick([]string{"f1.5", "f0.5", "f7.25"})
+				bad = []string{f, f}
+			}
+			decls = append(decls, decl{name: kind + " bad bounds " + strings.Join(bad, " "), kind: kind, args: bad})
+		}
+		decls = append(decls, decl{name: "int128 valid", kind: "int128", valid: true,
+			args:   []string{fmt.Sprintf("ai%d,i%d", lo, signWord(lo)), fmt.Sprintf("ai%d,i%d", hi, signWord(hi))},
+			expect: &step{kind: "int128", min: serialize.Int128From64(lo), max: serialize.Int128From64(hi)}})
+		bad := []string{pick(badCarrier), pick(badCarrier)}
+		if r.IntN(3) == 0 {
+			bad[1] = bad[0]
+		}
+		decls = append(decls, decl{name: "int128 bad carrier " + strings.Join(bad, " "), kind: "int128", args: bad})
+
+		fb := r.IntN(25)
+		fmin, fmax := int64(r.IntN(100)-100), int64(r.IntN(100))
+		decls = append(decls, decl{name: "fixed64 valid", kind: "fixed64", valid: true,
+			args:   []string{"i24", fmt.Sprintf("i%d", fb), fmt.Sprintf("i%d", fmin), fmt.Sprintf("i%d", fmax)},
+			expect: &step{kind: "fixed64", ib: 24, fb: fb, min: serialize.Int128From64(fmin), max: serialize.Int128From64(fmax)}})
+		decls = append(decls, decl{name: "fixed128 valid", kind: "fixed128", valid: true,
+			args:   []string{"i64", "i64", fmt.Sprintf("i%d", fmin), fmt.Sprintf("i%d", fmax)},
+			expect: &step{kind: "fixed128", ib: 64, fb: 64, min: serialize.Int128From64(fmin), max: serialize.Int128From64(fmax)}})
+		for _, kind := range []string{"fixed64", "fixed128"} {
+			ib, fbad := "i8", "i8"
+			if kind == "fixed128" {
+				ib, fbad = "i64", "i64"
+			}
+			bound := []string{pick([]string{"f1.5", "sx", "n", "b"}), pick([]string{"i1", "i2", "f1.5", "sx", "n"})}
+			if r.IntN(2) == 0 {
+				bound[0], bound[1] = bound[1], bound[0]
+				if bound[0] == "i1" || bound[0] == "i2" {
+					bound[1] = "f1.5"
+				}
+			}
+			var args []string
+			switch r.IntN(3) {
+			case 0:
+				args = []string{pick(hugeWidth), fbad, "i0", "i1"}
+			case 1:
+				args = []string{ib, pick(hugeWidth), "i0", "i1"}
+			default:
+				args = []string{pick(hugeWidth), pick(hugeWidth), "i0", "i1"}
+			}
+			if r.IntN(2) == 0 {
+				args = []string{pick(badScalar), pick(badScalar), "i0", "i1"}
+			}
+			if r.IntN(2) == 0 {
+				args = []string{ib, fbad, bound[0], bound[1]}
+			}
+			decls = append(decls, decl{name: kind + " bad " + strings.Join(args, " "), kind: kind, args: args})
+		}
+	}
+
+	var reqs []request
+	for i, d := range decls {
+		for _, state := range []string{"h", "f"} {
+			id := fmt.Sprintf("d%d%s", i, state)
+			reqs = append(reqs, request{id, fmt.Sprintf("d %s %s %s %s", id, state, d.kind, strings.Join(d.args, " "))})
+		}
+	}
+	out := map[string][]string{}
+	for off := 0; off < len(reqs); off += batchSize {
+		end := min(off+batchSize, len(reqs))
+		for k, v := range runDriver(t, sq, root, driver, off/batchSize, reqs[off:end]) {
+			out[k] = v
+		}
+	}
+
+	zeros := make([]byte, 16)
+	valid, refused := 0, 0
+	for i, d := range decls {
+		hot := out[fmt.Sprintf("d%dh", i)]
+		cold := out[fmt.Sprintf("d%df", i)]
+		if len(hot) != 6 || len(cold) != 6 {
+			t.Fatalf("declaration %d (%s): malformed driver answers %v %v", i, d.name, hot, cold)
+		}
+		if d.valid {
+			valid++
+			st := *d.expect
+			goR := goRead([]step{st}, zeros)
+			if !goR.ok {
+				t.Fatalf("declaration %d (%s): serialize.go refused a valid control: %s", i, d.name, goR.kind)
+			}
+			if hot[2] != "ok" || hot[4] != strconv.FormatInt(goR.bits, 10) {
+				t.Errorf("declaration %d (%s %v): squirrel answered %v, serialize.go read ok in %d bits", i, d.name, d.args, hot, goR.bits)
+			}
+			if cold[3] != "past_end" || cold[2] != "refused" {
+				t.Errorf("declaration %d (%s): a failed stream answered %v", i, d.name, cold)
+			}
+			continue
+		}
+		refused++
+		if hot[2] != "refused" || hot[3] != "value_out_of_range" || hot[4] != "0" || hot[5] != "held" {
+			t.Errorf("declaration %d (%s): healthy stream answered %v, want refused value_out_of_range 0 held", i, d.name, hot[2:])
+		}
+		if cold[2] != "refused" || cold[3] != "past_end" || cold[5] != "held" || cold[4] != "0" {
+			t.Errorf("declaration %d (%s): failed stream answered %v, want refused past_end 0 held", i, d.name, cold[2:])
+		}
+	}
+	t.Logf("declaration seeds: %d valid controls agree with serialize.go, %d bad declarations refused", valid, refused)
+}
+
+// signWord is the high half of a 64-bit value as a 128-bit two's complement.
+func signWord(x int64) int64 {
+	if x < 0 {
+		return -1
+	}
+	return 0
+}
+
+// BenchmarkReadIntegerDeclarations measures valid ReadStream reads for int32,
+// int128 and fixed64 declarations on the pinned Squirrel 3.2 runtime.
+func BenchmarkReadIntegerDeclarations(b *testing.B) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		b.Fatal(err)
+	}
+	sq := os.Getenv("SQ")
+	if sq == "" {
+		sq = filepath.Join(root, "dist", "squirrel-3.2", "bin", "sq")
+	}
+	if fi, err := os.Stat(sq); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+		b.Fatalf("the pinned interpreter SQ=%s does not resolve; run make dist-squirrel", sq)
+	}
+	cases := []struct {
+		name  string
+		write string
+		read  string
+	}{
+		{
+			name:  "int32",
+			write: `ws.serializeInt({ value = 42 }, -1000, 1000); ws.serializeInt({ value = -17 }, -1000, 1000); ws.serializeInt({ value = 0 }, -1000, 1000); ws.serializeInt({ value = 999 }, -1000, 1000);`,
+			read:  `if (!rs.serializeInt(h, -1000, 1000) || !rs.serializeInt(h, -1000, 1000) || !rs.serializeInt(h, -1000, 1000) || !rs.serializeInt(h, -1000, 1000)) throw "int32 read failed";`,
+		},
+		{
+			name:  "int128",
+			write: `ws.serializeInt128({ value = [42, 0] }, [-1000, -1], [1000, 0]); ws.serializeInt128({ value = [-17, -1] }, [-1000, -1], [1000, 0]); ws.serializeInt128({ value = [0, 0] }, [-1000, -1], [1000, 0]); ws.serializeInt128({ value = [999, 0] }, [-1000, -1], [1000, 0]);`,
+			read:  `if (!rs.serializeInt128(h, [-1000, -1], [1000, 0]) || !rs.serializeInt128(h, [-1000, -1], [1000, 0]) || !rs.serializeInt128(h, [-1000, -1], [1000, 0]) || !rs.serializeInt128(h, [-1000, -1], [1000, 0])) throw "int128 read failed";`,
+		},
+		{
+			name:  "fixed64",
+			write: `ws.serializeFixed64({ value = 42 << 8 }, 24, 8, -100, 100); ws.serializeFixed64({ value = (-17) << 8 }, 24, 8, -100, 100); ws.serializeFixed64({ value = 0 }, 24, 8, -100, 100); ws.serializeFixed64({ value = 99 << 8 }, 24, 8, -100, 100);`,
+			read:  `if (!rs.serializeFixed64(h, 24, 8, -100, 100) || !rs.serializeFixed64(h, 24, 8, -100, 100) || !rs.serializeFixed64(h, 24, 8, -100, 100) || !rs.serializeFixed64(h, 24, 8, -100, 100)) throw "fixed64 read failed";`,
+		},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			dir := b.TempDir()
+			script := filepath.Join(dir, "bench.nut")
+			code := fmt.Sprintf(`local root = %q;
+local serialize = dofile(root + "/src/serialize.nut", true);
+local ws = serialize.WriteStream(blob(64));
+%s
+ws.flush();
+local wire = ws.data();
+local h = { value = 0 };
+local iters = %d;
+for (local i = 0; i < iters; i++) {
+  local rs = serialize.ReadStream(wire);
+  %s
+}
+`, root, tc.write, b.N, tc.read)
+			if err := os.WriteFile(script, []byte(code), 0o644); err != nil {
+				b.Fatal(err)
+			}
+			b.ResetTimer()
+			cmd := exec.Command(sq, script)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				b.Fatalf("sq failed: %v\n%s", err, string(out))
+			}
+		})
+	}
+}

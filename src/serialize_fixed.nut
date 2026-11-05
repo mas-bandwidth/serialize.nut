@@ -100,7 +100,9 @@ local fixedPointCapacity = function(integerBits, signed) {
 // bit length of the raw range (zero for a degenerate range, on every width).
 local fixedPointParams64 = function(integerBits, fractionBits, min, max) {
   if (typeof integerBits != "integer" || typeof fractionBits != "integer" ||
-      integerBits < 1 || fractionBits < 0 || integerBits + fractionBits > 64 || min > max) {
+      typeof min != "integer" || typeof max != "integer" ||
+      integerBits < 1 || fractionBits < 0 || integerBits > 64 || fractionBits > 64 ||
+      integerBits + fractionBits > 64 || min > max) {
     return PANIC_PARAMS;
   }
   local cap = fixedPointCapacity(integerBits, min < 0);
@@ -121,7 +123,9 @@ local fixedPointParams64 = function(integerBits, fractionBits, min, max) {
 // storage width (serialize.go's serialize#54 note; STANDARD.md, fixed).
 local fixedPointParams128 = function(integerBits, fractionBits, min, max) {
   if (typeof integerBits != "integer" || typeof fractionBits != "integer" ||
-      integerBits < 1 || fractionBits < 0 || integerBits + fractionBits != 128 || min > max) {
+      typeof min != "integer" || typeof max != "integer" ||
+      integerBits < 1 || fractionBits < 0 || integerBits > 128 || fractionBits > 128 ||
+      integerBits + fractionBits != 128 || min > max) {
     return PANIC_PARAMS;
   }
   local cap = fixedPointCapacity(integerBits, min < 0);
