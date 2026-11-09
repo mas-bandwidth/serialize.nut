@@ -184,6 +184,8 @@ local measure = {};
 // (c), (g)). A degenerate range min == max costs zero bits and the value comes
 // from the range (STANDARD.md int).
 write.serializeInt128 <- function(s, h, min, max) {
+  if (typeof h != "table" || typeof h.value != "array" || h.value.len() != 2 ||
+      typeof h.value[0] != "integer" || typeof h.value[1] != "integer") return s._fail(SerializeError.ValueOutOfRange);
   if (i128cmp(min, max) > 0) throw PANIC_MINMAX;
   local v = h.value;
   if (i128cmp(v, min) < 0 || i128cmp(v, max) > 0) return s._fail(SerializeError.ValueOutOfRange);
@@ -211,6 +213,8 @@ read.serializeInt128 <- function(s, h, min, max) {
 };
 
 measure.serializeInt128 <- function(s, h, min, max) {
+  if (typeof h != "table" || typeof h.value != "array" || h.value.len() != 2 ||
+      typeof h.value[0] != "integer" || typeof h.value[1] != "integer") return s._fail(SerializeError.ValueOutOfRange);
   if (i128cmp(min, max) > 0) throw PANIC_MINMAX;
   local v = h.value;
   if (i128cmp(v, min) < 0 || i128cmp(v, max) > 0) return s._fail(SerializeError.ValueOutOfRange);
@@ -224,6 +228,8 @@ measure.serializeInt128 <- function(s, h, min, max) {
 // serializeUint128(s, h): the raw unsigned 128-bit integer, always 128 bits:
 // the low 64-bit half first, then the high half (STANDARD.md uint128)
 write.serializeUint128 <- function(s, h) {
+  if (typeof h != "table" || typeof h.value != "array" || h.value.len() != 2 ||
+      typeof h.value[0] != "integer" || typeof h.value[1] != "integer") return s._fail(SerializeError.ValueOutOfRange);
   if (!s._room(128)) return false;
   local v = h.value;
   s._put(v[0] & 0xFFFFFFFF, 32);
@@ -247,6 +253,8 @@ read.serializeUint128 <- function(s, h) {
 };
 
 measure.serializeUint128 <- function(s, h) {
+  if (typeof h != "table" || typeof h.value != "array" || h.value.len() != 2 ||
+      typeof h.value[0] != "integer" || typeof h.value[1] != "integer") return s._fail(SerializeError.ValueOutOfRange);
   if (!s._room(128)) return false;
   s._put(0, 128);
   return true;
