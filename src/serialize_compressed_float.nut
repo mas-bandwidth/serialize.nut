@@ -62,9 +62,8 @@ local paramsOrPanic = function(min, max, resolution, strict = false) {
   // clamped (IMPLEMENTING.md U9). The test is on the bits: Squirrel's float
   // comparison is not IEEE's (NaN > 0 is true on the pin), so a NaN
   // resolution passes the guard above and is caught here as a NaN values.
-  // Only the trapping entry (compressedFloatParams: write, measure and the
-  // public helper) makes it; the read arm keeps the clamp it always had, so
-  // the read path is unchanged.
+  // compressedFloatParams (write, measure and the public helper) raises it;
+  // the read arm refuses it as value_out_of_range before any bit moves.
   if (strict && (isNotFinite(delta) || isNotFinite(values))) return PANIC_PARAMS_FINITE;
   if (!(values >= 1.0)) values = 1.0;
   else if (values > 4294967040.0) values = 4294967040.0;
@@ -165,7 +164,7 @@ local write = {
 
 local read = {
   serializeCompressedFloat = function(s, h, min, max, resolution) {
-    local p = paramsOrPanic(min, max, resolution);
+    local p = paramsOrPanic(min, max, resolution, true);
     if (typeof p == "string") return s._fail(SerializeError.ValueOutOfRange);
     return readPrecomputed(s, h, p.maxIntegerValue, p.bits, p.delta, min);
   },
