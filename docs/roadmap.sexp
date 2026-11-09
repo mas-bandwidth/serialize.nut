@@ -1,8 +1,6 @@
 ; The serialize.nut roadmap: planned work, as data, never evaluated.
-; Same shape as nova-sprint's docs/roadmap.sexp (internal/roadmapdoc's package comment) and
-; serialize.js's docs/roadmap.sexp. Created 2026-10-27 at the 2.1.0 wrap-up (Glenn, 2026-10-27:
-; "I want all this on main in a place where we can stop soon"), holding the 2.1 work that release
-; deferred; the audit findings and most of the uniform rules landed after it, the same day, and
+; Same shape as serialize.js's docs/roadmap.sexp. Created at the 2.1.0 wrap-up to keep the
+; deferred 2.1 work on main in one place; the audit findings and most of the uniform rules landed after it, the same day, and
 ; the last two items (u6-u9-one-write-misuse-mechanism, u15-extras-ruling) landed in 2.1.1.
 (roadmap "v2.2"
  :title "serialize.nut roadmap"
