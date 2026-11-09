@@ -102,6 +102,8 @@ function TestU7ReadNeverTraps() {
     { what = "string holder not a table", call = function(rs, h) { return rs.serializeString(null, 8); } },
     { what = "bytes into a non-blob", call = function(rs, h) { return rs.serializeBytes([1, 2]); } },
     { what = "compressed float min >= max", call = function(rs, h) { return rs.serializeCompressedFloat(h, 1.0, 1.0, 0.01); } },
+    { what = "compressed float (max - min) / resolution not finite", call = function(rs, h) { return rs.serializeCompressedFloat(h, 0.0, 1e30, 1e-30); } },
+    { what = "compressed float resolution NaN", call = function(rs, h) { return rs.serializeCompressedFloat(h, 0.0, 10.0, 0.0 / 0.0); } },
     { what = "compressed float bits inconsistent", call = function(rs, h) { return rs.serializeCompressedFloatPrecomputed(h, params.maxIntegerValue, params.bits + 1, params.delta, 0.0); } },
     { what = "compressed float maxIntegerValue 0", call = function(rs, h) { return rs.serializeCompressedFloatPrecomputed(h, 0, 0, params.delta, 0.0); } },
     { what = "compressed float maxIntegerValue above 4294967040", call = function(rs, h) { return rs.serializeCompressedFloatPrecomputed(h, 0xFFFFFFFF, 32, params.delta, 0.0); } },
