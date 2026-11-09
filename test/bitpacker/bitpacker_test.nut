@@ -263,6 +263,28 @@ function TestBitpacker() {
   local nine = blob(9);
   raises(function() { tooBig.writeBytes(nine, 0, 9); }, "serialize: bit writer overflow", "a 9-byte writeBytes");
 
+  // flushBits ends the write: a later writeBits or writeBytes raises, on a
+  // 16-byte and an 8-byte buffer, and moves no bit. A flush that ends on a
+  // word boundary leaves the writer usable.
+  foreach (size in [ 16, 8 ]) {
+    local fw = BitWriter(blob(size));
+    fw.writeBits(0xab, 8);
+    fw.flushBits();
+    raises(function() { fw.writeBits(0xcd, 8); }, "serialize: write misuse: a write after flush",
+      "writeBits after flush on a " + size + "-byte buffer");
+    raises(function() { fw.writeBytes(blob(1), 0, 1); }, "serialize: write misuse: a write after flush",
+      "writeBytes after flush on a " + size + "-byte buffer");
+    check(fw.bitsWritten() == 8, "a write after flush moved the index to " + fw.bitsWritten());
+    sameBlob(fw.data(), [ 0xab ], 1, "the bytes after a write after flush on a " + size + "-byte buffer");
+  }
+  local ww = BitWriter(blob(16));
+  ww.writeBits(0, 32);
+  ww.writeBits(0, 32);
+  ww.flushBits();
+  ww.writeBits(1, 1);
+  ww.flushBits();
+  sameBlob(ww.data(), [ 0, 0, 0, 0, 0, 0, 0, 0, 0x01 ], 9, "a write after a word-boundary flush");
+
   // Reader API misuse raises the same texts, and the data is read as bytes
   // (STANDARD.md, bytes; Reader Obligations).
   local rr = BitReader(blob(8));
