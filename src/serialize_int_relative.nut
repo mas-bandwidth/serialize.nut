@@ -9,6 +9,7 @@
 // the arm shape and the number model are DESIGN.md (c), (d), (g).
 local _M = vargv[0];
 local require = vargv[1];
+local validReadHolder = require("serialize_bits").validReadHolder;
 
 local SerializeError = require("serialize_stream").SerializeError;
 
@@ -95,6 +96,7 @@ local read = {};
 // U16; the reference refuses it on read since 2.1)
 read.serializeIntRelative <- function(s, previous, h) {
   if (s.error() != null) return false;
+  if (!validReadHolder(h)) return s._fail(SerializeError.ValueOutOfRange);
   if (typeof previous != "integer" || previous < 0 || previous > INT_MAX) return s._fail(SerializeError.ValueOutOfRange);
   if (!s._room(1)) return false;
   if (s._take(1)) {

@@ -12,6 +12,7 @@
 // range keeps plain arithmetic, where nothing can wrap (wide64 below).
 local _M = vargv[0];
 local require = vargv[1];
+local validReadHolder = require("serialize_bits").validReadHolder;
 
 local streams = require("serialize_stream");
 local int128 = require("serialize_int128");
@@ -98,7 +99,8 @@ write.serializeInt <- function(s, h, min, max) {
 // U16).
 read.serializeInt <- function(s, h, min, max) {
   if (s._error != null) return false;
-  if (min < INT32_MIN || max > INT32_MAX || min > max) return s._fail(SerializeError.ValueOutOfRange);
+  if (!validReadHolder(h)) return s._fail(SerializeError.ValueOutOfRange);
+  if (typeof min != "integer" || typeof max != "integer" || min < INT32_MIN || max > INT32_MAX || min > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired32(min, max);
   if (bits == 0) { h.value = min; return true; }
   if (!s._room(bits)) return false;
@@ -147,7 +149,8 @@ write.serializeInt64 <- function(s, h, min, max) {
 
 read.serializeInt64 <- function(s, h, min, max) {
   if (s._error != null) return false;
-  if (min > max) return s._fail(SerializeError.ValueOutOfRange);
+  if (!validReadHolder(h)) return s._fail(SerializeError.ValueOutOfRange);
+  if (typeof min != "integer" || typeof max != "integer" || min > max) return s._fail(SerializeError.ValueOutOfRange);
   local bits = bitsRequired64(min, max);
   if (bits == 0) { h.value = min; return true; }
   if (!s._room(bits)) return false;
