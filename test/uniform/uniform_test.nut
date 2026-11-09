@@ -334,6 +334,26 @@ function TestU9WriteMisuseTraps() {
   ws = serialize.WriteStream(blob(8));
   check(ws.serializeObject(refusing) == false && ws.error() == null, "a refusing object on a write latched " + ws.error());
   check(ws.serializeBool({ value = true }) && ws.bitsProcessed() == 1, "a write after a refusing object failed");
+  // flush ends the write: a later bits or bytes write traps, on a 16-byte and
+  // an 8-byte buffer, and moves no bit
+  local afters = [
+    { what = "bits", call = function(s) { return s.serializeUint8({ value = 0xCD }); } },
+    { what = "bytes", call = function(s) { return s.serializeBytes(blob(1)); } },
+  ];
+  foreach (size in [ 16, 8 ]) {
+    foreach (a in afters) {
+      local what = a.what + " after flush on a " + size + "-byte buffer";
+      local fs = serialize.WriteStream(blob(size));
+      check(fs.serializeUint8({ value = 0xAB }), what + ": the first write");
+      fs.flush();
+      local got = null;
+      try { a.call(fs); } catch (e) { got = e; }
+      check(got == "serialize: write misuse: a write after flush", what + ": trapped with " + got);
+      check(fs.error() == null && fs.bitsProcessed() == 8, what + ": latched " + fs.error() + " or moved bits");
+      local d = fs.data();
+      check(d.len() == 1 && d[0] == 0xAB, what + ": the written bytes changed");
+    }
+  }
 }
 
 // U6: a measure makes every check a write makes, except room and buffer size,
