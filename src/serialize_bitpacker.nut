@@ -26,6 +26,7 @@ local PANIC_WRITE_OVERFLOW = "serialize: bit writer overflow";
 local PANIC_READ_OVERFLOW = "serialize: bit reader would read past the end of the buffer";
 local PANIC_NOT_ALIGNED = "serialize: byte array serialization requires byte alignment";
 local PANIC_BUFFER_BYTES = "serialize: bit writer buffer size must be a multiple of 8 bytes";
+local PANIC_WRITE_AFTER_FLUSH = "serialize: write misuse: a write after flush";
 
 class BitWriter {
   _buffer = null;     // the caller's blob, written in place
@@ -51,6 +52,7 @@ class BitWriter {
   // and raises, exactly as Go's BitWriter does (panicWriteOverflow).
   function writeBits(value, bits) {
     if (bits < 1 || bits > 32) throw PANIC_BITS_RANGE;
+    if (_scratchBits != (_bitsWritten & 63)) throw PANIC_WRITE_AFTER_FLUSH;
     if (_bitsWritten + bits > _numBits) throw PANIC_WRITE_OVERFLOW;
     _writeBits(value, bits);
   }
@@ -120,13 +122,16 @@ class BitWriter {
   // writeBytes (panicNotAligned, panicWriteOverflow). The total is checked
   // before any byte moves.
   function writeBytes(data, offset, n) {
+    if (_scratchBits != (_bitsWritten & 63)) throw PANIC_WRITE_AFTER_FLUSH;
     if (_bitsWritten % 8 != 0) throw PANIC_NOT_ALIGNED;
     if (_bitsWritten + n * 8 > _numBits) throw PANIC_WRITE_OVERFLOW;
     for (local i = 0; i < n; i++) _writeBits(data[offset + i], 8);
   }
 
   // flushBits writes the partial scratch word out; it ends the write
-  // (STANDARD.md, General Conventions, Flush; serialize.go FlushBits).
+  // (STANDARD.md, General Conventions, Flush; serialize.go FlushBits). A write
+  // after it raises, since the scratch no longer holds the bits written mod
+  // 64; a flush on a word boundary leaves nothing to tell, and writes go on.
   function flushBits() {
     if (_scratchBits != 0) _flushWord();
   }
