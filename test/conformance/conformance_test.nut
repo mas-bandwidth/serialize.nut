@@ -926,9 +926,9 @@ local CONTROLS = [
 
 // listDir(dir, suffix): the names in dir ending in suffix, sorted; the pinned
 // interpreter has no directory-listing builtin, so list through system() into
-// a scratch file
+// a scratch file in this test's working directory
 local listDir = function(root, dir, suffix, scratchName) {
-  local scratch = root + "/build/" + scratchName;
+  local scratch = scratchName;
   local rc = system("ls -1 '" + dir + "' > '" + scratch + "'");
   check(rc == 0, "could not list " + dir);
   local names = [];
@@ -957,11 +957,12 @@ local corpusRoot = function(root, override) {
   return dir;
 };
 
-// sabotagedLibrary(root, control): a copy of src/ under build/controls/<rule>/
-// with the control's patches applied, loaded through its own entry (the closed
-// loader resolves modules beside the entry it was loaded from, DESIGN.md (f))
+// sabotagedLibrary(root, control): a copy of src/ under this test's scratch
+// directory controls/<rule>/ with the control's patches applied, loaded
+// through its own entry (the closed loader resolves modules beside the entry
+// it was loaded from, DESIGN.md (f))
 local sabotagedLibrary = function(root, control) {
-  local dir = root + "/build/controls/" + control.rule;
+  local dir = "controls/" + control.rule;
   check(system("rm -rf '" + dir + "' && mkdir -p '" + dir + "'") == 0, "could not make " + dir);
   local files = {};
   foreach (name in listDir(root, root + "/src", ".nut", "controls-src-listing.txt")) files[name] <- readBlob(root + "/src/" + name);
@@ -1049,7 +1050,7 @@ function TestConformanceCorpus() {
   local rejected = false;
   try { runPath(serialize, corpusDir + "/conformance-controls/unknown-operation.txt", "control"); } catch (e) { rejected = true; }
   check(rejected, "conformance-controls/unknown-operation.txt was not rejected");
-  local scratch = root + "/build/conformance-control-wstring.txt";
+  local scratch = "conformance-control-wstring.txt";
   local body = "operation wstring\nname control-wstring-is-retired\nparam buffer_size = 8\nbytes 00\nexpect value = 0\nconsumed 3\n";
   writeBlob(scratch, stringToBlob(body));
   rejected = false;
@@ -1123,7 +1124,7 @@ function TestConformanceCorpus() {
     "control string-growing-prefix-concat was not distinguished from balanced conversion");
   print("control string-growing-prefix-concat: known-bad growing-prefix loop rejected\n");
 
-  check(system("rm -rf '" + root + "/build/controls'") == 0, "could not remove build/controls");
+  check(system("rm -rf 'controls'") == 0, "could not remove controls");
 }
 
 // TestConformanceCorpusDir: unit test of corpusRoot, the SERIALIZE_CORPUS_DIR
@@ -1135,7 +1136,7 @@ function TestConformanceCorpusDir() {
   check(corpusRoot(root, null) == root, "an unset SERIALIZE_CORPUS_DIR is not the repository root");
   check(corpusRoot(root, "") == root, "an empty SERIALIZE_CORPUS_DIR is not the repository root");
 
-  local rel = "build/corpus-dir-unit";
+  local rel = "build/test/conformance/TestConformanceCorpusDir/corpus-dir-unit";
   local dir = root + "/" + rel;
   check(system("rm -rf '" + dir + "' && mkdir -p '" + dir + "/conformance' '" + dir + "/conformance-controls'") == 0, "could not make " + dir);
   writeBlob(dir + "/conformance/only.txt", stringToBlob("operation bits\n"));

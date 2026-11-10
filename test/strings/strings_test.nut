@@ -755,7 +755,7 @@ local runConversionCostControl = function(root, serialize) {
   ];
 
   foreach (sab in sabotages) {
-    local dir = root + "/build/string-control-" + sab.name;
+    local dir = "string-control-" + sab.name;
     check(system("rm -rf '" + dir + "' && mkdir -p '" + dir + "' && cp '" + root + "/src/'*.nut '" + dir + "/'") == 0,
       "could not populate " + dir);
     local idx = srcText.find(sab.needle);
