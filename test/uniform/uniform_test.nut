@@ -357,6 +357,8 @@ function TestU9WriteMisuseTraps() {
   local afters = [
     { what = "bits", call = function(s) { return s.serializeUint8({ value = 0xCD }); } },
     { what = "bytes", call = function(s) { return s.serializeBytes(blob(1)); } },
+    { what = "zero-length bytes", call = function(s) { return s.serializeBytes(blob(0)); } },
+    { what = "empty string", call = function(s) { return s.serializeString({ value = "" }, 1); } },
   ];
   foreach (size in [ 16, 8 ]) {
     foreach (a in afters) {
