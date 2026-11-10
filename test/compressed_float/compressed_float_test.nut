@@ -175,12 +175,12 @@ function TestSerializeCompressedFloat() {
       }
       // expect bits = 0x...
       local want = rec.expect.slice(rec.expect.find("0x") + 2);
-      local wantBits = want.tointeger(16);
-      local wantValue = f32ToDouble(wantBits);
+      local wantBits = want.tointeger(16) & 0xFFFFFFFF;
       local ok = rs.serializeCompressedFloat(holder, min, max, res);
       check(ok == true, rec.name + ": an accepted read failed with " + rs.error());
-      check(holder.value == wantValue,
-        rec.name + ": decoded " + holder.value + ", want " + wantValue);
+      local gotBits = serialize.float32Bits(holder.value);
+      check(gotBits == wantBits,
+        rec.name + ": decoded 0x" + format("%08x", gotBits) + ", want 0x" + format("%08x", wantBits));
       if ("consumed" in rec) {
         check(rs.bitsProcessed() == rec.consumed.tointeger(),
           rec.name + ": consumed " + rs.bitsProcessed() + " bits, want " + rec.consumed);

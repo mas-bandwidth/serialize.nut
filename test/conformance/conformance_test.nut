@@ -533,7 +533,7 @@ local runStep = function(stream, s) {
     return ok;
   }
   if (kind == "bytes") {
-    if (stream.isReading()) s.data = blob(s.width);
+    if (stream.isReading() && s.data == null) s.data = blob(s.width);
     local ok = stream.serializeBytes(s.data);
     return ok;
   }
@@ -632,6 +632,8 @@ local expectationMatches = function(s, expected) {
 // --- sentinels (a refused read leaves them in place) -------------------------
 local sentinelPattern = [0xCAFEF00D, 0];
 local sentinelNumber = int128From64(-1234567);
+local sentinelByte = 0xCA;
+local sentinelText = "sentinel destination";
 
 local sentinelFor = function(kind) {
   if (kind == "int" || kind == "int64" || kind == "int128" ||
@@ -644,7 +646,11 @@ local seedSentinels = function(steps) {
     s.pattern = [sentinelFor(s.kind)[0], sentinelFor(s.kind)[1]];
     s.boolean = true;
     s.data = null;
-    s.text = "";
+    if (s.kind == "bytes") {
+      s.data = blob(s.width);
+      for (local i = 0; i < s.data.len(); i++) s.data[i] = sentinelByte;
+    }
+    s.text = sentinelText;
   }
 };
 
@@ -654,6 +660,14 @@ local checkDestination = function(rec, s) {
     check(same128(s.pattern, sentinelFor(s.kind)), rec.name + ": the refused read wrote to its destination");
   } else if (s.kind == "bool") {
     check(s.boolean == true, rec.name + ": the refused read wrote to its destination");
+  } else if (s.kind == "bytes") {
+    local untouched = s.data != null && s.data.len() == s.width;
+    for (local i = 0; untouched && i < s.data.len(); i++) {
+      if ((s.data[i] & 0xff) != sentinelByte) untouched = false;
+    }
+    check(untouched, rec.name + ": the refused read wrote to its destination");
+  } else if (s.kind == "string") {
+    check(s.text == sentinelText, rec.name + ": the refused read wrote to its destination");
   }
 };
 
