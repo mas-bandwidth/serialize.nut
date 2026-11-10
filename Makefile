@@ -20,7 +20,7 @@ SQUIRREL_VERSION := 3.2
 SQUIRREL_URL     := https://github.com/albertodemichelis/squirrel/archive/refs/tags/v$(SQUIRREL_VERSION).tar.gz
 SQUIRREL_SHA256  := 02805414cfadd5bbb921891d3599b83375a40650abd6404a8ab407dc5e86a996
 SQUIRREL_DIR     := dist/squirrel-$(SQUIRREL_VERSION)
-SQ ?= $(if $(shell [ -x $(CURDIR)/$(SQUIRREL_DIR)/bin/sq ] && echo yes),$(CURDIR)/$(SQUIRREL_DIR)/bin/sq,$(shell command -v sq 2>/dev/null || echo $(CURDIR)/$(SQUIRREL_DIR)/bin/sq))
+SQ ?= $(CURDIR)/$(SQUIRREL_DIR)/bin/sq
 export SQ
 
 .PHONY: dist-squirrel
@@ -44,7 +44,7 @@ dist-squirrel:
 # THE TOOLCHAIN GATE: refuses by name when the pin does not resolve, never a skip.
 .PHONY: toolchain-squirrel
 toolchain-squirrel:
-	@if ! command -v "$(SQ)" >/dev/null 2>&1; then \
+	@if [ ! -x "$(SQ)" ]; then \
 		echo "toolchain-squirrel REFUSES: the pinned interpreter SQ=$(SQ) does not resolve; run make dist-squirrel"; \
 		exit 1; fi
 
