@@ -84,7 +84,7 @@ function TestSmoke() {
   // raises when run, which is proved first, so a load of either would raise.
   // The proof runs in a copy of src/ in this test's scratch directory, so the
   // repository root is never written.
-  local scratch = "shadow";
+  local scratch = root + "/build/test/smoke/TestSmoke/shadow";
   check(system("rm -rf '" + scratch + "' && mkdir -p '" + scratch + "/src' && cp '" + root + "/src/'*.nut '" + scratch + "/src/'") == 0,
     "could not make " + scratch);
   local shadows = [ "serialize_stream.nut", scratch + "/serialize_stream.nut" ];
