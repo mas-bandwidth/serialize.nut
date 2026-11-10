@@ -75,8 +75,8 @@ local writeRange = function(s, value, min, max) {
   return true;
 };
 
-// readRange(s, min, max): a prefix read, null when it refuses, otherwise the
-// value. The width is checked before it reads, and an offset past the range is
+// readRange(s, min, max): a prefix read, the table { ok = false } when it
+// refuses, otherwise the integer value. The width is checked before it reads, and an offset past the range is
 // ValueOutOfRange after its bits are counted, exactly as serialize.go's
 // ReadStream.SerializeInt.
 local readRange = function(s, min, max) {

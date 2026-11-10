@@ -131,7 +131,6 @@ class Stream {
   // later calls skip the loader, the name check and the module lookups.
   function _arm(family, method) {
     local byFamily = ARMS[_kind];
-    if (byFamily == null) return arm(_kind, family, method);
     local arms = family in byFamily ? byFamily[family] : null;
     if (arms == null) {
       arms = {};
