@@ -34,6 +34,21 @@ local writeText = function(path, text) {
   f.close();
 };
 
+// loadModule(root, name): a module loaded the way a host that vendors one file
+// does (DESIGN.md (f)): vargv[0] is the exports table and vargv[1] the loader's
+// require.
+local loadModule = function(root, name) {
+  local require;
+  require = function(mod, who = null) {
+    local m = {};
+    loadfile(root + "/src/" + mod + ".nut", true).bindenv(::getroottable())(m, require);
+    return m;
+  };
+  local m = {};
+  loadfile(root + "/src/" + name + ".nut", true).bindenv(::getroottable())(m, require);
+  return m;
+};
+
 // the names DESIGN.md (a) lists, one per line in its API block:
 //   api <name>            a name of the table the entry returns
 //   method <name>         a method of every stream
@@ -180,4 +195,31 @@ function TestSmoke() {
   check(mf.bitsProcessed() == 3 + 40 + 1 + 8 + 16 + 32 + 64 + 7 + 10 && mf.error() == serialize.SerializeError.None,
     "the measure charged " + mf.bitsProcessed() + " bits, reason " + mf.error());
   raises(function() { serialize.WriteStream(blob(12)); }, "serialize: bit writer buffer size must be a multiple of 8 bytes", "a 12-byte buffer");
+}
+
+// TestModuleVmGuard: every module loaded directly carries the entry's
+// number-model refusal (DESIGN.md (c)), so a host that vendors one module file
+// enforces the 64-bit integer and double requirement by name.
+function TestModuleVmGuard() {
+  local root = ::SERIALIZE_ROOT;
+  local prefix = "serialize: refuses this VM: ";
+  local savedInt = ::_intsize_;
+  local savedFloat = ::_floatsize_;
+  local badVm = [
+    { intsize = 4, floatsize = 8 },
+    { intsize = 8, floatsize = 4 },
+  ];
+  foreach (vm in badVm) {
+    foreach (name in ["serialize_float", "serialize_stream"]) {
+      local got = null;
+      ::_intsize_ = vm.intsize;
+      ::_floatsize_ = vm.floatsize;
+      try { loadModule(root, name); } catch (e) { got = e; }
+      ::_intsize_ = savedInt;
+      ::_floatsize_ = savedFloat;
+      check(got != null, name + " loaded with _intsize_ " + vm.intsize + " and _floatsize_ " + vm.floatsize);
+      check(typeof got == "string" && got.len() >= prefix.len() && got.slice(0, prefix.len()) == prefix,
+        name + " refused with " + got);
+    }
+  }
 }

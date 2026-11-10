@@ -10,6 +10,10 @@
 // live here: any family's logic. A family module is required LAZILY, on the
 // first call that needs it (DESIGN.md (h)), and while its file is absent the
 // method raises "serialize: <method> not implemented".
+if (_intsize_ != 8 || _floatsize_ != 8) {
+  throw "serialize: refuses this VM: _intsize_ " + _intsize_ + " and _floatsize_ " + _floatsize_ +
+    ", the library needs 8 and 8 (Squirrel built sq64 with -DSQUSEDOUBLE; DESIGN.md (c))";
+}
 local _M = vargv[0];
 local require = vargv[1];
 

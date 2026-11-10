@@ -21,6 +21,10 @@
 // infinity, is refused too. All of it is integer surgery on the bits of
 // castf2i(x): the blob library's castf2i/casti2f reinterpret without
 // conversion, and the 'f' view of a blob is never used (DESIGN.md (e)).
+if (_intsize_ != 8 || _floatsize_ != 8) {
+  throw "serialize: refuses this VM: _intsize_ " + _intsize_ + " and _floatsize_ " + _floatsize_ +
+    ", the library needs 8 and 8 (Squirrel built sq64 with -DSQUSEDOUBLE; DESIGN.md (c))";
+}
 local _M = vargv[0];
 local require = vargv[1];
 
