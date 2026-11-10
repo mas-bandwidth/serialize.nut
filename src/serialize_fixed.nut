@@ -25,7 +25,9 @@
 // (DESIGN.md (h)).
 local _M = vargv[0];
 local require = vargv[1];
-local validReadHolder = require("serialize_bits").validReadHolder;
+local bits = require("serialize_bits");
+local validReadHolder = bits.validReadHolder;
+local bitlen64 = bits.bitlen64;
 
 local streams = require("serialize_stream");
 local int128 = require("serialize_int128");
@@ -50,23 +52,6 @@ local ucmp64 = function(x, y) {
   return 0;
 };
 
-// bitlen64(x): the number of bits needed to represent the unsigned 64-bit
-// value x (0 for zero, 64 when the top bit is set), as serialize.go's
-// BitsRequired64 (DESIGN.md (c))
-local bitlen64 = function(x) {
-  if (x == 0) return 0;
-  if (x < 0) return 64;
-  local n = 1;
-  local v = x;
-  if (v >= 0x100000000) { n += 32; v = v >>> 32; }
-  if (v >= 0x10000) { n += 16; v = v >>> 16; }
-  if (v >= 0x100) { n += 8; v = v >>> 8; }
-  if (v >= 0x10) { n += 4; v = v >>> 4; }
-  if (v >= 0x4) { n += 2; v = v >>> 2; }
-  if (v >= 0x2) { n += 1; }
-  return n;
-};
-
 // the 64-bit lanes and the 128-bit sum, from serialize_int128.nut (DESIGN.md
 // (c): a sum, a difference or a shift that can wrap is never left to signed
 // arithmetic, which is C++ undefined behaviour in the VM)
@@ -74,6 +59,8 @@ local sub64 = int128.sub64;
 local add64 = int128.add64;
 local shl64 = int128.shl64;
 local add128 = int128.add;
+local putGroups = int128.putGroups;
+local takeGroups = int128.takeGroups;
 
 // fixedPointCapacity(integerBits, signed): the whole-unit bounds a Q format
 // can represent, clamped to the int64 domain the bounds live in; the
@@ -166,52 +153,6 @@ local takeGroups64 = function(s, numBits) {
   return g0 | (g1 << 32);
 };
 
-// putGroups128(s, off, numBits): the 128-bit offset's least significant 32-bit
-// group first, with the final group carrying the remainder (STANDARD.md,
-// fixed: split exactly as serialize_bits splits wide values)
-local putGroups128 = function(s, off, numBits) {
-  local lo = off[0];
-  local hi = off[1];
-  if (numBits <= 32) {
-    s._put(lo & MASK32, numBits);
-  } else if (numBits <= 64) {
-    s._put(lo & MASK32, 32);
-    s._put((lo >>> 32) & MASK32, numBits - 32);
-  } else if (numBits <= 96) {
-    s._put(lo & MASK32, 32);
-    s._put((lo >>> 32) & MASK32, 32);
-    s._put(hi & MASK32, numBits - 64);
-  } else {
-    s._put(lo & MASK32, 32);
-    s._put((lo >>> 32) & MASK32, 32);
-    s._put(hi & MASK32, 32);
-    s._put((hi >>> 32) & MASK32, numBits - 96);
-  }
-};
-
-// takeGroups128(s, numBits): read the 128-bit offset, least significant
-// 32-bit group first
-local takeGroups128 = function(s, numBits) {
-  if (numBits <= 32) {
-    return [s._take(numBits), 0];
-  } else if (numBits <= 64) {
-    local g0 = s._take(32);
-    local g1 = s._take(numBits - 32);
-    return [g0 | (g1 << 32), 0];
-  } else if (numBits <= 96) {
-    local g0 = s._take(32);
-    local g1 = s._take(32);
-    local g2 = s._take(numBits - 64);
-    return [g0 | (g1 << 32), g2];
-  } else {
-    local g0 = s._take(32);
-    local g1 = s._take(32);
-    local g2 = s._take(32);
-    local g3 = s._take(numBits - 96);
-    return [g0 | (g1 << 32), g2 | (g3 << 32)];
-  }
-};
-
 local write = {};
 local read = {};
 local measure = {};
@@ -272,7 +213,7 @@ write.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
   local off = int128.sub(h.value, p.rawMin);
   if (int128.cmp(off, p.rawRange) > 0) return s._fail(SerializeError.ValueOutOfRange);
   if (!s._room(p.numBits)) return false;
-  if (p.numBits > 0) putGroups128(s, off, p.numBits);
+  if (p.numBits > 0) putGroups(s, off, p.numBits);
   return true;
 };
 
@@ -287,7 +228,7 @@ read.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
   if (s._error != null) return false;
   if (p.numBits == 0) { h.value = [p.rawMin[0], p.rawMin[1]]; return true; }
   if (!s._room(p.numBits)) return false;
-  local off = takeGroups128(s, p.numBits);
+  local off = takeGroups(s, p.numBits);
   if (int128.cmp(off, p.rawRange) > 0) return s._fail(SerializeError.ValueOutOfRange);
   h.value = add128(p.rawMin, off);
   return true;

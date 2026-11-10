@@ -12,7 +12,9 @@
 // range keeps plain arithmetic, where nothing can wrap (wide64 below).
 local _M = vargv[0];
 local require = vargv[1];
-local validReadHolder = require("serialize_bits").validReadHolder;
+local bits = require("serialize_bits");
+local validReadHolder = bits.validReadHolder;
+local bitlen64 = bits.bitlen64;
 
 local streams = require("serialize_stream");
 local int128 = require("serialize_int128");
@@ -38,22 +40,6 @@ local sub64 = int128.sub64;
 // the span added to min is at most max.
 local wide64 = function(min, max) {
   return min < 0 && max >= 0 && max > MAX64 + min;
-};
-
-// bitlen64(x): the number of bits needed to represent the unsigned 64-bit
-// value x (0 for zero, 64 when the top bit is set)
-local bitlen64 = function(x) {
-  if (x == 0) return 0;
-  if (x < 0) return 64;
-  local n = 1;
-  local v = x;
-  if (v >= 0x100000000) { n += 32; v = v >>> 32; }
-  if (v >= 0x10000) { n += 16; v = v >>> 16; }
-  if (v >= 0x100) { n += 8; v = v >>> 8; }
-  if (v >= 0x10) { n += 4; v = v >>> 4; }
-  if (v >= 0x4) { n += 2; v = v >>> 2; }
-  if (v >= 0x2) { n += 1; }
-  return n;
 };
 
 // bitsRequired32(min, max): the int range's width: zero when min == max, else
