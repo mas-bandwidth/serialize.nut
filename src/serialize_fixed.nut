@@ -162,6 +162,7 @@ local measure = {};
 // A bad declaration, or a raw value outside the raw bounds, is write misuse:
 // it traps and writes nothing (IMPLEMENTING.md U9; DESIGN.md (g)).
 write.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
+  if (typeof h != "table" || typeof h.value != "integer") return s._fail(SerializeError.ValueOutOfRange);
   local p = fixedPointParams64(integerBits, fractionBits, min, max);
   if (typeof p == "string") throw p;
   local off = sub64(h.value, p.rawMin);
@@ -193,6 +194,7 @@ read.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
 // writer, charged on the measure stream (STANDARD.md, The Measure Stream;
 // serialize.go MeasureStream.SerializeFixed64)
 measure.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
+  if (typeof h != "table" || typeof h.value != "integer") return s._fail(SerializeError.ValueOutOfRange);
   local p = fixedPointParams64(integerBits, fractionBits, min, max);
   if (typeof p == "string") throw p;
   local off = sub64(h.value, p.rawMin);
@@ -208,6 +210,8 @@ measure.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) 
 // unsigned 128-bit domain, and a raw value outside the raw bounds traps
 // (IMPLEMENTING.md U9; DESIGN.md (g)).
 write.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
+  if (typeof h != "table" || typeof h.value != "array" || h.value.len() != 2 ||
+      typeof h.value[0] != "integer" || typeof h.value[1] != "integer") return s._fail(SerializeError.ValueOutOfRange);
   local p = fixedPointParams128(integerBits, fractionBits, min, max);
   if (typeof p == "string") throw p;
   local off = int128.sub(h.value, p.rawMin);
@@ -238,6 +242,8 @@ read.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
 // writer (STANDARD.md, The Measure Stream; serialize.go
 // MeasureStream.SerializeFixed128)
 measure.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
+  if (typeof h != "table" || typeof h.value != "array" || h.value.len() != 2 ||
+      typeof h.value[0] != "integer" || typeof h.value[1] != "integer") return s._fail(SerializeError.ValueOutOfRange);
   local p = fixedPointParams128(integerBits, fractionBits, min, max);
   if (typeof p == "string") throw p;
   local off = int128.sub(h.value, p.rawMin);
