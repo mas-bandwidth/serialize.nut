@@ -498,10 +498,10 @@ serialize.go v2.0.0 returns them, and raised on declarations: two mechanisms,
 which U9 does not allow.)
 
 **The writer is STRICT**: for every program it accepts, exactly serialize.go
-v2.0.0's bytes (the fuzz differential holds it). Where serialize.go v2.0.0
-returns `ErrPastEnd` for a buffer that runs out, this writer traps at the
-same operation; the differential's short-buffer check requires that step to
-agree.
+v2.1.1's bytes (the fuzz differential holds it). Where serialize.go v2.1.1
+panics on its room check (`serialize: bit writer overflow`) for a buffer that
+runs out, this writer traps at the same operation; the differential's
+short-buffer check requires that step to agree.
 
 **A reader never traps** (IMPLEMENTING.md U7, U16). Every bad declaration
 the writer traps on (a bit count that is not an integer in its range; min >

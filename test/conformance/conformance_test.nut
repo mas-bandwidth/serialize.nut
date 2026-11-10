@@ -641,8 +641,8 @@ local sentinelBytes = function(width) {
   return b;
 };
 
-local isSentinelBytes = function(b) {
-  if (b == null) return false;
+local isSentinelBytes = function(b, width) {
+  if (b == null || b.len() != width) return false;
   for (local i = 0; i < b.len(); i++) if ((b[i] & 0xff) != sentinelByte) return false;
   return true;
 };
@@ -669,7 +669,7 @@ local checkDestination = function(rec, s) {
   } else if (s.kind == "bool") {
     check(s.boolean == true, rec.name + ": the refused read wrote to its destination");
   } else if (s.kind == "bytes") {
-    check(isSentinelBytes(s.data), rec.name + ": the refused read wrote to its destination");
+    check(isSentinelBytes(s.data, s.width), rec.name + ": the refused read wrote to its destination");
   } else if (s.kind == "string") {
     check(s.text == sentinelText, rec.name + ": the refused read wrote to its destination");
   }
@@ -1061,6 +1061,24 @@ function TestConformanceCorpus() {
     }
   }
   print("corpus and extra: " + total + " records\n");
+
+  // REGRESSION: a bytes step refused inside a sequence leaves its whole
+  // destination, and a shortened or empty blob is not untouched. The local
+  // record exercises the sequence path; the shortened destination below holds
+  // only the sentinel bytes, so only the width can tell it was replaced.
+  local bytesRegress = "operation sequence\n" +
+    "name regress-refused-bytes-sequence-destination\n" +
+    "param step = bytes 4\n" +
+    "bytes 00 00\n" +
+    "expect refused past_end\n";
+  local bytesScratch = "conformance-regress-bytes.txt";
+  writeBlob(bytesScratch, stringToBlob(bytesRegress));
+  runPath(serialize, bytesScratch, "regression");
+  local shortened = { kind = "bytes", width = 4, data = sentinelBytes(2) };
+  local rejectedShort = false;
+  try { checkDestination({ name = "regress-shortened-bytes-destination" }, shortened); }
+  catch (e) { rejectedShort = true; }
+  check(rejectedShort, "a shortened bytes destination was not rejected as touched");
 
   // CONTROL: a corpus file whose operation has no runner is REJECTED, never
   // skipped: the reference's own control file, and a scratch file spelling the
