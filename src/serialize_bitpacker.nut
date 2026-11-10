@@ -27,6 +27,7 @@ local PANIC_READ_OVERFLOW = "serialize: bit reader would read past the end of th
 local PANIC_NOT_ALIGNED = "serialize: byte array serialization requires byte alignment";
 local PANIC_BUFFER_BYTES = "serialize: bit writer buffer size must be a multiple of 8 bytes";
 local PANIC_WRITE_AFTER_FLUSH = "serialize: write misuse: a write after flush";
+local PANIC_BYTE_RANGE = "serialize: byte array serialization requires a non-negative offset and byte count";
 
 class BitWriter {
   _buffer = null;     // the caller's blob, written in place
@@ -124,6 +125,7 @@ class BitWriter {
   function writeBytes(data, offset, n) {
     if (_scratchBits != (_bitsWritten & 63)) throw PANIC_WRITE_AFTER_FLUSH;
     if (_bitsWritten % 8 != 0) throw PANIC_NOT_ALIGNED;
+    if (typeof offset != "integer" || offset < 0 || typeof n != "integer" || n < 0) throw PANIC_BYTE_RANGE;
     if (_bitsWritten + n * 8 > _numBits) throw PANIC_WRITE_OVERFLOW;
     for (local i = 0; i < n; i++) _writeBits(data[offset + i], 8);
   }
@@ -211,6 +213,7 @@ class BitReader {
   // (STANDARD.md, bytes; Reader Obligations; serialize.go ReadBytes).
   function readBytes(dest, offset, n) {
     if (_bitsRead % 8 != 0) throw PANIC_NOT_ALIGNED;
+    if (typeof offset != "integer" || offset < 0 || typeof n != "integer" || n < 0) throw PANIC_BYTE_RANGE;
     if (_bitsRead + n * 8 > _numBits) throw PANIC_READ_OVERFLOW;
     local byteIndex = _bitsRead >> 3;
     for (local i = 0; i < n; i++) dest[offset + i] = _data[byteIndex + i];
