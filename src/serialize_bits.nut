@@ -43,23 +43,15 @@ local checkWide = function(s, v, bits) {
 // where 1 << 32 would overflow).
 local mask32 = function(k) { return k == 32 ? 0xffffffff : (1 << k) - 1; };
 
-// bitlen(n): the number of bits of the unsigned 64-bit value n (stored in a
-// SQInteger). A negative n has the top bit set, so its unsigned bit length is
-// 64 (DESIGN.md (c): the unsigned reading).
-local bitlen = function(n) {
-  local b = 0;
-  while (n != 0) { b++; n = n >>> 1; }
-  return b;
-};
-
-// the 64-bit and 128-bit wrapping differences, from serialize_int128.nut's
-// lanes (DESIGN.md (c): a difference that can wrap is never left to signed
-// arithmetic, which is C++ undefined behaviour in the VM); required on the
-// first range pricing, never by the arms
+// the 64-bit bit length and the 64-bit and 128-bit wrapping differences, from
+// serialize_int128.nut's lanes (DESIGN.md (c): a difference that can wrap is
+// never left to signed arithmetic, which is C++ undefined behaviour in the VM);
+// required on the first range pricing, never by the arms
 local lanes = function() { return require("serialize_int128"); };
 local u128len = function(a) {
-  if (a[1] != 0) return 64 + bitlen(a[1]);
-  return bitlen(a[0]);
+  local m = lanes();
+  if (a[1] != 0) return 64 + m.bitlen64(a[1]);
+  return m.bitlen64(a[0]);
 };
 
 // THE EXPORTS (DESIGN.md (h)): range pricing and zigzag, as serialize.go's
@@ -68,11 +60,11 @@ local u128len = function(a) {
 // (STANDARD.md, int: a degenerate range costs zero bits).
 _M.bitsRequired <- function(min, max) {
   if (min == max) return 0;
-  return bitlen(lanes().sub64(max, min));
+  return lanes().bitlen64(lanes().sub64(max, min));
 };
 _M.bitsRequired64 <- function(min, max) {
   if (min == max) return 0;
-  return bitlen(lanes().sub64(max, min));
+  return lanes().bitlen64(lanes().sub64(max, min));
 };
 _M.bitsRequired128 <- function(min, max) {
   if (min[0] == max[0] && min[1] == max[1]) return 0;

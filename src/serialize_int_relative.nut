@@ -11,6 +11,7 @@ local _M = vargv[0];
 local require = vargv[1];
 
 local SerializeError = require("serialize_stream").SerializeError;
+local bitlen64 = require("serialize_int128").bitlen64;
 
 local INT_MAX = 2147483647;
 
@@ -27,13 +28,7 @@ local TIERS = [
 // BitsRequired(min, max): ceil(log2(max - min + 1)), the payload width of a ranged
 // int (STANDARD.md int_relative: each bounded tier's payload is a ranged integer)
 local bitsRequired = function(min, max) {
-  local span = max - min;
-  local bits = 0;
-  while (span > 0) {
-    span = span >>> 1;
-    bits++;
-  }
-  return bits;
+  return bitlen64(max - min);
 };
 
 // previous outside the int_relative domain is the caller's own state gone wrong,

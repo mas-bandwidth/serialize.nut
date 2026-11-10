@@ -51,23 +51,6 @@ local refusalName = function(reason) {
 };
 _M.refusalName <- refusalName;
 
-// the family of every serialize method (DESIGN.md (h)): the method's arm lives
-// in src/serialize_<family>.nut as <module>.write / .read / .measure [method]
-local FAMILY = {
-  serializeBits = "bits", serializeBits64 = "bits", serializeBool = "bits",
-  serializeUint8 = "bits", serializeUint16 = "bits", serializeUint32 = "bits",
-  serializeUint64 = "bits", serializeAlign = "bits",
-  serializeInt = "int", serializeInt64 = "int",
-  serializeInt128 = "int128", serializeUint128 = "int128",
-  serializeFixed64 = "fixed", serializeFixed128 = "fixed",
-  serializeIntRelative = "int_relative",
-  serializeFloat = "float", serializeDouble = "float",
-  serializeCompressedFloat = "compressed_float",
-  serializeCompressedFloatPrecomputed = "compressed_float",
-  serializeBytes = "bytes", serializeString = "bytes",
-};
-_M.FAMILY <- FAMILY;
-
 // arm(kind, family, method): the family's arm for this stream kind, loaded on
 // first use. Absent file, or a file with no such arm: the not-implemented
 // error, raised in every stream state (misuse traps and missing code raises;
@@ -378,7 +361,6 @@ class MeasureStream extends Stream {
   function _putBytes(data, offset, n) { _bits += 8 * n; }
 }
 
-_M.Stream <- Stream;
 _M.WriteStream <- WriteStream;
 _M.ReadStream <- ReadStream;
 _M.MeasureStream <- MeasureStream;

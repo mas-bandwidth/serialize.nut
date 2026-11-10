@@ -114,17 +114,11 @@ local u128len = function(x) {
 };
 
 // the two-lane helpers serialize_fixed.nut reuses (DESIGN.md (h)): sub, cmp,
-// lsh, rsh, each on [lo, hi]
+// lsh, each on [lo, hi]
 local lsh = function(x, n) {
   if (n == 0) return x;
   if (n < 64) return [shl64(x[0], n), (shl64(x[1], n) | (x[0] >>> (64 - n)))];
   return [0, shl64(x[0], n - 64)];
-};
-
-local rsh = function(x, n) {
-  if (n == 0) return x;
-  if (n < 64) return [((x[0] >>> n) | shl64(x[1], 64 - n)), (x[1] >>> n)];
-  return [(x[1] >>> (n - 64)), 0];
 };
 
 // putGroups(s, off, numBits): write the 128-bit offset least significant 32-bit
@@ -272,11 +266,13 @@ _M.uint128From64 <- function(x) {
 _M.add64 <- add64;
 _M.sub64 <- sub64;
 _M.shl64 <- shl64;
+_M.bitlen64 <- bitlen64;
+_M.putGroups128 <- putGroups;
+_M.takeGroups128 <- takeGroups;
 _M.add <- u128add;
 _M.sub <- u128sub;
 _M.cmp <- u128cmp;
 _M.lsh <- lsh;
-_M.rsh <- rsh;
 
 _M.write <- write;
 _M.read <- read;
