@@ -79,15 +79,21 @@ local add128 = int128.add;
 // can represent, clamped to the int64 domain the bounds live in; the
 // signedness follows the bounds, as serialize.go's fixedPointCapacity
 // (STANDARD.md, fixed; the sign bit counts toward integer_bits)
+local CAPACITY = [0, 0];
 local fixedPointCapacity = function(integerBits, signed) {
   if (signed) {
-    if (integerBits >= 65) return [MIN64, MAX64];
-    local minRepresentable = integerBits == 64 ? MIN64 : -(1 << (integerBits - 1));
-    if (integerBits >= 64) return [minRepresentable, MAX64];
-    return [minRepresentable, (1 << (integerBits - 1)) - 1];
+    if (integerBits >= 65) {
+      CAPACITY[0] = MIN64; CAPACITY[1] = MAX64;
+    } else {
+      local minRepresentable = integerBits == 64 ? MIN64 : -(1 << (integerBits - 1));
+      CAPACITY[0] = minRepresentable;
+      CAPACITY[1] = integerBits >= 64 ? MAX64 : (1 << (integerBits - 1)) - 1;
+    }
+  } else {
+    CAPACITY[0] = 0;
+    CAPACITY[1] = integerBits >= 63 ? MAX64 : (1 << integerBits) - 1;
   }
-  if (integerBits >= 63) return [0, MAX64];
-  return [0, (1 << integerBits) - 1];
+  return CAPACITY;
 };
 
 // fixedPointParams64(integerBits, fractionBits, min, max): serialize.go v2.0.0's
@@ -99,6 +105,7 @@ local fixedPointCapacity = function(integerBits, signed) {
 // bounds are whole-unit bounds shifted left by fractionBits in the unsigned
 // domain, where a negative bound wraps two's complement, and the width is the
 // bit length of the raw range (zero for a degenerate range, on every width).
+local PARAMS64 = { rawMin = 0, rawRange = 0, numBits = 0 };
 local fixedPointParams64 = function(integerBits, fractionBits, min, max) {
   if (typeof integerBits != "integer" || typeof fractionBits != "integer" ||
       integerBits < 1 || fractionBits < 0 || integerBits + fractionBits > 64 || min > max) {
@@ -109,8 +116,10 @@ local fixedPointParams64 = function(integerBits, fractionBits, min, max) {
   local rawMin = shl64(min, fractionBits);
   local rawMax = shl64(max, fractionBits);
   local rawRange = sub64(rawMax, rawMin);
-  local numBits = rawMin == rawMax ? 0 : bitlen64(rawRange);
-  return { rawMin = rawMin, rawRange = rawRange, numBits = numBits };
+  PARAMS64.rawMin = rawMin;
+  PARAMS64.rawRange = rawRange;
+  PARAMS64.numBits = rawMin == rawMax ? 0 : bitlen64(rawRange);
+  return PARAMS64;
 };
 
 // fixedPointParams128(integerBits, fractionBits, min, max): serialize.go
@@ -120,6 +129,7 @@ local fixedPointParams64 = function(integerBits, fractionBits, min, max) {
 // range's bit length plus fractionBits (shifting a range left adds exactly
 // that many bits), except a degenerate range, which costs zero bits on every
 // storage width (serialize.go's serialize#54 note; STANDARD.md, fixed).
+local PARAMS128 = { rawMin = null, rawRange = null, numBits = 0 };
 local fixedPointParams128 = function(integerBits, fractionBits, min, max) {
   if (typeof integerBits != "integer" || typeof fractionBits != "integer" ||
       integerBits < 1 || fractionBits < 0 || integerBits + fractionBits != 128 || min > max) {
@@ -130,13 +140,10 @@ local fixedPointParams128 = function(integerBits, fractionBits, min, max) {
   local rawMin = int128.lsh(int128.int128From64(min), fractionBits);
   local rawMax = int128.lsh(int128.int128From64(max), fractionBits);
   local rawRange = int128.sub(rawMax, rawMin);
-  local numBits;
-  if (min == max) {
-    numBits = 0;
-  } else {
-    numBits = bitlen64(sub64(max, min)) + fractionBits;
-  }
-  return { rawMin = rawMin, rawRange = rawRange, numBits = numBits };
+  PARAMS128.rawMin = rawMin;
+  PARAMS128.rawRange = rawRange;
+  PARAMS128.numBits = min == max ? 0 : bitlen64(sub64(max, min)) + fractionBits;
+  return PARAMS128;
 };
 
 // putGroups64(s, off, numBits): the 64-bit offset's low 32 bits first, then
