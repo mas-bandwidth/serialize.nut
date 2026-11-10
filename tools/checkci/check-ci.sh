@@ -44,6 +44,31 @@ check_file() {
 		rc=1
 	done < <(grep -nE '[0-9a-fA-F]{64}' "$file" || true)
 
+	# setup-go must not archive the fleet host's shared Go caches. Inspect
+	# each step separately, so another step's cache setting cannot satisfy it.
+	while IFS= read -r line; do
+		[ -n "$line" ] || continue
+		echo "--- FAIL TestCheckCI (${file}:${line} setup-go must set cache: false)"
+		rc=1
+	done < <(awk '
+		function indent(s, t) { t=s; sub(/[^ ].*$/, "", t); return length(t) }
+		function finish() { if (setup && (cache_count != 1 || !cache_false)) print setup_line; setup=0; cache_count=0; cache_false=0; with_indent=-1 }
+		/^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+		{
+			n=indent($0)
+			if ($0 ~ /^[ ]*-[ ]+/) { finish(); step_indent=n }
+			else if (setup && n <= step_indent) finish()
+			if ($0 ~ /^[ ]*(-[ ]*)?uses:[ ]*actions\/setup-go@[^ ]+/) { setup=1; setup_line=NR }
+			if (setup && $0 ~ /^[ ]*with:[ ]*($|#)/) with_indent=n
+			else if (setup && with_indent >= 0 && n <= with_indent) with_indent=-1
+			if (setup && with_indent >= 0 && n == with_indent+2 && $0 ~ /^[ ]*cache:/) {
+				cache_count++
+				if ($0 ~ /^[ ]*cache:[ ]*false[ ]*($|#)/) cache_false=1
+			}
+		}
+		END { finish() }
+	' "$file")
+
 	# THE RUNNERS: every job runs on this repository's own fleet set, never
 	# a hosted machine.
 	local jobs guards
@@ -164,6 +189,17 @@ if [ "$control_rc" -eq 0 ]; then
 	exit 1
 fi
 echo "control: a scratch ci.yml without make test-ubsan fails as it must:"
+printf '%s\n' "$control" | sed 's/^/  /'
+
+# THE GO CACHE CONTROL. Removing the setting must fail.
+sed '/^[[:space:]]*cache:[[:space:]]*false[[:space:]]*$/d' "$ci" > "$scratch/ci-go-cache.yml"
+control_rc=0
+control=$(check_file "$scratch/ci-go-cache.yml") || control_rc=$?
+if [ "$control_rc" -eq 0 ]; then
+	echo "--- FAIL TestCheckCI (control: a setup-go step without cache: false was accepted)"
+	exit 1
+fi
+echo "control: a scratch ci.yml without cache: false fails as it must:"
 printf '%s\n' "$control" | sed 's/^/  /'
 
 if ! check_file "$ci"; then
