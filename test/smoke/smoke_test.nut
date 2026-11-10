@@ -73,6 +73,32 @@ function TestSmoke() {
   foreach (path in shadows) remove(path);
   if (failure != null) throw failure;
 
+  // THE ENTRY'S DIRECTORY (DESIGN.md (f)): a backslash separator names the
+  // entry's own directory just as a slash does, and an entry whose path has no
+  // separator is refused by name instead of resolving from the working
+  // directory.
+  local entry = readText(root + "/src/serialize.nut");
+  local backslash = "../src\\smoke_backslash_entry.nut";
+  local bare = "smoke_bare_entry.nut";
+  writeText(backslash, entry);
+  writeText(bare, entry);
+  local backslashFn = loadfile(backslash, true);
+  local bareFn = loadfile(bare, true);
+  local viaBackslash = null;
+  local backslashError = null;
+  local bareError = null;
+  try { viaBackslash = backslashFn(); } catch (e) { backslashError = e; }
+  try { bareFn(); } catch (e) { bareError = e; }
+  remove(backslash);
+  remove(bare);
+  if (backslashError != null) throw backslashError;
+  check(typeof viaBackslash == "table", "a backslash entry returned " + typeof viaBackslash + ", not the API table");
+  check(viaBackslash.WriteStream(blob(16)).isWriting(), "a backslash entry's WriteStream direction");
+  check(bareError != null, "a bare entry did not raise");
+  local want = "serialize: the entry path ";
+  check(typeof bareError == "string" && bareError.len() >= want.len() && bareError.slice(0, want.len()) == want,
+    "a bare entry raised " + bareError + ", want " + want);
+
   check(typeof serialize == "table", "the entry returned " + typeof serialize + ", not the API table");
   // the loader's directory is internal (IMPLEMENTING.md U15, the export
   // ruling): not on the API table
