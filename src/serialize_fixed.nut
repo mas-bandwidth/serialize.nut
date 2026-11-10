@@ -25,6 +25,7 @@
 // (DESIGN.md (h)).
 local _M = vargv[0];
 local require = vargv[1];
+local validReadHolder = require("serialize_bits").validReadHolder;
 
 local streams = require("serialize_stream");
 local int128 = require("serialize_int128");
@@ -227,6 +228,8 @@ write.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
 // it reads (STANDARD.md, fixed; Reader Obligations). A refusal leaves the
 // holder untouched and the stream terminal (DESIGN.md (g)).
 read.serializeFixed64 <- function(s, h, integerBits, fractionBits, min, max) {
+  if (!validReadHolder(h)) return s._fail(SerializeError.ValueOutOfRange);
+  if (typeof min != "integer" || typeof max != "integer") return s._fail(SerializeError.ValueOutOfRange);
   local p = fixedPointParams64(integerBits, fractionBits, min, max);
   if (typeof p == "string") return s._fail(SerializeError.ValueOutOfRange);
   if (s._error != null) return false;
@@ -270,6 +273,8 @@ write.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
 // rejected rather than clamped, and a read past the end is PastEnd before it
 // reads (STANDARD.md, fixed; Reader Obligations; DESIGN.md (g))
 read.serializeFixed128 <- function(s, h, integerBits, fractionBits, min, max) {
+  if (!validReadHolder(h)) return s._fail(SerializeError.ValueOutOfRange);
+  if (typeof min != "integer" || typeof max != "integer") return s._fail(SerializeError.ValueOutOfRange);
   local p = fixedPointParams128(integerBits, fractionBits, min, max);
   if (typeof p == "string") return s._fail(SerializeError.ValueOutOfRange);
   if (s._error != null) return false;

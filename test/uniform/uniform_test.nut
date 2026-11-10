@@ -448,3 +448,90 @@ function TestU15Exports() {
   foreach (k, v in serialize) check(k in allowed, "the API table exports " + k + ", which U15 does not allow");
   foreach (k, v in allowed) check(k in serialize, "the API table lacks " + k);
 }
+
+function TestReadHolderContract() {
+  local serialize = load();
+  local Box = class { value = "untouched"; };
+  local p = serialize.compressedFloatParams(0.0, 10.0, 0.01);
+  local reads = [
+    function(s, h) { return s.serializeBits(h, 8); },
+    function(s, h) { return s.serializeBits64(h, 40); },
+    function(s, h) { return s.serializeBool(h); },
+    function(s, h) { return s.serializeUint8(h); },
+    function(s, h) { return s.serializeUint16(h); },
+    function(s, h) { return s.serializeUint32(h); },
+    function(s, h) { return s.serializeUint64(h); },
+    function(s, h) { return s.serializeUint128(h); },
+    function(s, h) { return s.serializeInt(h, 0, 10); },
+    function(s, h) { return s.serializeInt64(h, 0, 10); },
+    function(s, h) { return s.serializeInt128(h, [0, 0], [10, 0]); },
+    function(s, h) { return s.serializeIntRelative(0, h); },
+    function(s, h) { return s.serializeFixed64(h, 8, 8, 0, 1); },
+    function(s, h) { return s.serializeFixed128(h, 64, 64, 0, 1); },
+    function(s, h) { return s.serializeFloat(h); },
+    function(s, h) { return s.serializeDouble(h); },
+    function(s, h) { return s.serializeCompressedFloat(h, 0.0, 10.0, 0.01); },
+    function(s, h) { return s.serializeCompressedFloatPrecomputed(h, p.maxIntegerValue, p.bits, p.delta, 0.0); },
+  ];
+  foreach (i, read in reads) {
+    foreach (h in [ {}, Box(), null, 0 ]) {
+      local s = serialize.ReadStream(blob(32));
+      local result = null, raised = null;
+      try { result = read(s, h); } catch (e) { raised = e; }
+      check(raised == null, "holder operation " + i + " raised " + raised);
+      check(result == false && s.error() == "value_out_of_range" && s.bitsProcessed() == 0,
+        "holder operation " + i + " did not refuse before reading");
+      if (typeof h == "instance") check(h.value == "untouched", "instance holder changed");
+    }
+    local data = blob(32);
+    data[0] = 1;
+    local s = serialize.ReadStream(data);
+    local h = { value = "untouched" };
+    check(read(s, h) && h.value != "untouched", "table holder operation " + i);
+  }
+}
+
+function TestReadDeclarationTypes() {
+  local serialize = load();
+  local reads = [];
+  foreach (bad in [ 0.5, "0", null, true, {}, [] ]) {
+    local b = bad;
+    reads.append(function(s, h) { return s.serializeInt(h, b, 10); });
+    reads.append(function(s, h) { return s.serializeInt(h, 0, b); });
+    reads.append(function(s, h) { return s.serializeInt64(h, b, 10); });
+    reads.append(function(s, h) { return s.serializeInt64(h, 0, b); });
+    reads.append(function(s, h) { return s.serializeIntRelative(b, h); });
+    reads.append(function(s, h) { return s.serializeFixed64(h, 8, 8, b, 1); });
+    reads.append(function(s, h) { return s.serializeFixed64(h, 8, 8, 0, b); });
+    reads.append(function(s, h) { return s.serializeFixed128(h, 64, 64, b, 1); });
+    reads.append(function(s, h) { return s.serializeFixed128(h, 64, 64, 0, b); });
+    reads.append(function(s, h) { return s.serializeFixed64(h, b, 8, 0, 1); });
+    reads.append(function(s, h) { return s.serializeFixed64(h, 8, b, 0, 1); });
+    reads.append(function(s, h) { return s.serializeFixed128(h, b, 64, 0, 1); });
+    reads.append(function(s, h) { return s.serializeFixed128(h, 64, b, 0, 1); });
+  }
+  foreach (bad in [ 0, 0.5, null, {}, [], [0], [0, 0.5], ["0", 0], [0, 0, 0] ]) {
+    local b = bad;
+    reads.append(function(s, h) { return s.serializeInt128(h, b, [10, 0]); });
+    reads.append(function(s, h) { return s.serializeInt128(h, [0, 0], b); });
+  }
+  foreach (bad in [ "0", null, true, {}, [] ]) {
+    local b = bad;
+    reads.append(function(s, h) { return s.serializeCompressedFloat(h, b, 10.0, 0.01); });
+    reads.append(function(s, h) { return s.serializeCompressedFloat(h, 0.0, b, 0.01); });
+    reads.append(function(s, h) { return s.serializeCompressedFloat(h, 0.0, 10.0, b); });
+    reads.append(function(s, h) { return s.serializeCompressedFloatPrecomputed(h, 10, 4, 10.0, b); });
+  }
+  foreach (i, read in reads) {
+    foreach (failed in [false, true]) {
+      local s = serialize.ReadStream(blob(32));
+      if (failed) s.fail(serialize.SerializeError.PastEnd);
+      local h = { value = "untouched" };
+      local result = null, raised = null;
+      try { result = read(s, h); } catch (e) { raised = e; }
+      check(raised == null, "declaration operation " + i + " raised " + raised);
+      check(result == false && s.error() == (failed ? "past_end" : "value_out_of_range"), "declaration reason " + i);
+      check(s.bitsProcessed() == 0 && h.value == "untouched", "declaration changed state " + i);
+    }
+  }
+}

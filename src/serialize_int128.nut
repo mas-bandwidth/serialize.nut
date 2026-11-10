@@ -11,6 +11,7 @@
 // (a value is composed from the lanes with shifts and masks only).
 local _M = vargv[0];
 local require = vargv[1];
+local validReadHolder = require("serialize_bits").validReadHolder;
 
 local streams = require("serialize_stream");
 local SerializeError = streams.SerializeError;
@@ -200,7 +201,10 @@ write.serializeInt128 <- function(s, h, min, max) {
 // raise (IMPLEMENTING.md U7, U16)
 read.serializeInt128 <- function(s, h, min, max) {
   if (s._error != null) return false;
-  if (i128cmp(min, max) > 0) return s._fail(SerializeError.ValueOutOfRange);
+  if (!validReadHolder(h)) return s._fail(SerializeError.ValueOutOfRange);
+  if (typeof min != "array" || min.len() != 2 || typeof min[0] != "integer" || typeof min[1] != "integer" ||
+      typeof max != "array" || max.len() != 2 || typeof max[0] != "integer" || typeof max[1] != "integer" ||
+      i128cmp(min, max) > 0) return s._fail(SerializeError.ValueOutOfRange);
   local numBits = u128len(u128sub(max, min));
   if (numBits == 0) { h.value = [min[0], min[1]]; return true; }
   if (!s._room(numBits)) return false;
@@ -241,6 +245,7 @@ write.serializeUint128 <- function(s, h) {
 
 read.serializeUint128 <- function(s, h) {
   if (s._error != null) return false;
+  if (!validReadHolder(h)) return s._fail(SerializeError.ValueOutOfRange);
   if (!s._room(128)) return false;
   local g0 = s._take(32);
   local g1 = s._take(32);
