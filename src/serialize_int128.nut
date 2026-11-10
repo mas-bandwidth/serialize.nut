@@ -11,7 +11,9 @@
 // (a value is composed from the lanes with shifts and masks only).
 local _M = vargv[0];
 local require = vargv[1];
-local validReadHolder = require("serialize_bits").validReadHolder;
+local bits = require("serialize_bits");
+local validReadHolder = bits.validReadHolder;
+local bitlen64 = bits.bitlen64;
 
 local streams = require("serialize_stream");
 local SerializeError = streams.SerializeError;
@@ -26,22 +28,6 @@ local ucmp64 = function(x, y) {
   if (ax < ay) return -1;
   if (ax > ay) return 1;
   return 0;
-};
-
-// bitlen64(x): the number of bits needed to represent the unsigned 64-bit
-// value x (0 for zero, 64 when the top bit is set)
-local bitlen64 = function(x) {
-  if (x == 0) return 0;
-  if (x < 0) return 64;
-  local n = 1;
-  local v = x;
-  if (v >= 0x100000000) { n += 32; v = v >>> 32; }
-  if (v >= 0x10000) { n += 16; v = v >>> 16; }
-  if (v >= 0x100) { n += 8; v = v >>> 8; }
-  if (v >= 0x10) { n += 4; v = v >>> 4; }
-  if (v >= 0x4) { n += 2; v = v >>> 2; }
-  if (v >= 0x2) { n += 1; }
-  return n;
 };
 
 // THE 64-BIT LANES (DESIGN.md (c): signed overflow, and a left shift that
@@ -115,17 +101,11 @@ local u128len = function(x) {
 };
 
 // the two-lane helpers serialize_fixed.nut reuses (DESIGN.md (h)): sub, cmp,
-// lsh, rsh, each on [lo, hi]
+// lsh, each on [lo, hi]
 local lsh = function(x, n) {
   if (n == 0) return x;
   if (n < 64) return [shl64(x[0], n), (shl64(x[1], n) | (x[0] >>> (64 - n)))];
   return [0, shl64(x[0], n - 64)];
-};
-
-local rsh = function(x, n) {
-  if (n == 0) return x;
-  if (n < 64) return [((x[0] >>> n) | shl64(x[1], 64 - n)), (x[1] >>> n)];
-  return [(x[1] >>> (n - 64)), 0];
 };
 
 // putGroups(s, off, numBits): write the 128-bit offset least significant 32-bit
@@ -281,7 +261,8 @@ _M.add <- u128add;
 _M.sub <- u128sub;
 _M.cmp <- u128cmp;
 _M.lsh <- lsh;
-_M.rsh <- rsh;
+_M.putGroups <- putGroups;
+_M.takeGroups <- takeGroups;
 
 _M.write <- write;
 _M.read <- read;

@@ -24,6 +24,7 @@ local _M = vargv[0];
 local require = vargv[1];
 
 local E = require("serialize_stream").SerializeError;
+local bitlen64 = require("serialize_bits").bitlen64;
 
 local PANIC_BUFFER_SIZE = "serialize: string buffer size must be in [1,1<<31)";
 local PANIC_NOT_BLOB = "serialize: serializeBytes requires a blob";
@@ -56,13 +57,7 @@ local writeString = function(h) {
 // offset max - min. The string ranges here have min 0 and max below 2^31, so
 // the subtraction and the shifts stay in the number model (DESIGN.md (c)).
 local rangeBits = function(min, max) {
-  local x = max - min;
-  local bits = 0;
-  while (x > 0) {
-    bits++;
-    x = x >>> 1;
-  }
-  return bits;
+  return bitlen64(max - min);
 };
 
 // writeRange(s, value, min, max): the ranged-int prefix, value already known
