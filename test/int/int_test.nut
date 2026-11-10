@@ -183,7 +183,7 @@ local parseRecords = function(text) {
       rec["bytes"] <- hexs;
     }
     else if (words[0] == "expect") {
-      rec["expect"] <- (words[1] == "value") ? ["value", parseNumber(words[3])] : ["refused"];
+      rec["expect"] <- (words[1] == "value") ? ["value", parseNumber(words[3])] : ["refused", words[2]];
     }
     else if (words[0] == "consumed") rec["consumed"] <- words[1].tointeger();
     else if (words[0] == "writer") rec["writer"] <- words[1];
@@ -213,7 +213,7 @@ local runRead = function(serialize, op, rec, is128) {
 
   if (rec.expect[0] == "refused") {
     check(ok == false, rec.name + ": refused read returned true");
-    check(rs.error() != null, rec.name + ": no error latched");
+    check(rs.error() == rec.expect[1], rec.name + ": refused as " + rs.error() + ", want " + rec.expect[1]);
     check(cmpVal(h.value, sentinel, is128), rec.name + ": a refusal changed the destination");
     local before = rs.bitsProcessed();
     local h2 = { value = sentinel };

@@ -533,14 +533,14 @@ local runStep = function(stream, s) {
     return ok;
   }
   if (kind == "bytes") {
-    if (stream.isReading()) s.data = blob(s.width);
+    if (stream.isReading() && s.data == null) s.data = blob(s.width);
     local ok = stream.serializeBytes(s.data);
     return ok;
   }
   if (kind == "string") {
     local h = { value = s.text };
     local ok = stream.serializeString(h, s.width);
-    if (ok) s.text = h.value;
+    s.text = h.value;
     return ok;
   }
   if (kind == "fixed") {
@@ -632,6 +632,20 @@ local expectationMatches = function(s, expected) {
 // --- sentinels (a refused read leaves them in place) -------------------------
 local sentinelPattern = [0xCAFEF00D, 0];
 local sentinelNumber = int128From64(-1234567);
+local sentinelByte = 0xCA;
+local sentinelText = "destination untouched";
+
+local sentinelBytes = function(width) {
+  local b = blob(width);
+  for (local i = 0; i < width; i++) b[i] = sentinelByte;
+  return b;
+};
+
+local isSentinelBytes = function(b) {
+  if (b == null) return false;
+  for (local i = 0; i < b.len(); i++) if ((b[i] & 0xff) != sentinelByte) return false;
+  return true;
+};
 
 local sentinelFor = function(kind) {
   if (kind == "int" || kind == "int64" || kind == "int128" ||
@@ -643,8 +657,8 @@ local seedSentinels = function(steps) {
   foreach (s in steps) {
     s.pattern = [sentinelFor(s.kind)[0], sentinelFor(s.kind)[1]];
     s.boolean = true;
-    s.data = null;
-    s.text = "";
+    s.data = s.kind == "bytes" ? sentinelBytes(s.width) : null;
+    s.text = sentinelText;
   }
 };
 
@@ -654,6 +668,10 @@ local checkDestination = function(rec, s) {
     check(same128(s.pattern, sentinelFor(s.kind)), rec.name + ": the refused read wrote to its destination");
   } else if (s.kind == "bool") {
     check(s.boolean == true, rec.name + ": the refused read wrote to its destination");
+  } else if (s.kind == "bytes") {
+    check(isSentinelBytes(s.data), rec.name + ": the refused read wrote to its destination");
+  } else if (s.kind == "string") {
+    check(s.text == sentinelText, rec.name + ": the refused read wrote to its destination");
   }
 };
 

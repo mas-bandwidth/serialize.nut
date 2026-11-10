@@ -140,6 +140,15 @@ local parseRecords = function(text) {
 function TestSerializeCompressedFloat() {
   local root = ::SERIALIZE_ROOT;
   local serialize = dofile(root + "/src/serialize.nut", true);
+  // the float32 bit conversion, from the library's own serialize_float.nut
+  // exports (never a second narrowing)
+  local srcRequire;
+  srcRequire = function(name, who = null) {
+    local m = {};
+    loadfile(root + "/src/" + name + ".nut", true).bindenv(::getroottable())(m, srcRequire);
+    return m;
+  };
+  local float32Bits = srcRequire("serialize_float").float32Bits;
 
   // (1) the corpus
   local corpusText = readText(root + "/conformance/compressed_float.txt");
@@ -176,11 +185,11 @@ function TestSerializeCompressedFloat() {
       // expect bits = 0x...
       local want = rec.expect.slice(rec.expect.find("0x") + 2);
       local wantBits = want.tointeger(16);
-      local wantValue = f32ToDouble(wantBits);
       local ok = rs.serializeCompressedFloat(holder, min, max, res);
       check(ok == true, rec.name + ": an accepted read failed with " + rs.error());
-      check(holder.value == wantValue,
-        rec.name + ": decoded " + holder.value + ", want " + wantValue);
+      check(float32Bits(holder.value) == wantBits,
+        rec.name + ": decoded bits 0x" + format("%08x", float32Bits(holder.value)) +
+          ", want 0x" + format("%08x", wantBits));
       if ("consumed" in rec) {
         check(rs.bitsProcessed() == rec.consumed.tointeger(),
           rec.name + ": consumed " + rs.bitsProcessed() + " bits, want " + rec.consumed);
