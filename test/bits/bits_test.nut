@@ -490,6 +490,26 @@ function TestBitsRequiredBounds() {
   raises(function() { serialize.bitsRequired(5, 3); }, "serialize: ", "bitsRequired min greater than max");
 }
 
+// bitsRequired64(0, x) is the unsigned bit length of x. Both the answer and
+// every comparison the width takes depend only on x's highest set bit, so the
+// two ends of each class, 2^k and 2^(k+1) - 1, and the negatives (top bit set)
+// cover every input. The oracle is the one-bit-per-step shift loop.
+function TestBitLengthEveryClass() {
+  local serialize = dofile(::SERIALIZE_ROOT + "/src/serialize.nut", true);
+  local oracle = function(n) {
+    local b = 0;
+    while (n != 0) { b++; n = n >>> 1; }
+    return b;
+  };
+  local inputs = [ 1, -1, 0x8000000000000000, 0xC000000000000000, -2 ];
+  for (local k = 1; k < 63; k++) inputs.extend([ 1 << k, (1 << k) - 1, (1 << k) + 1 ]);
+  inputs.append(0x7FFFFFFFFFFFFFFF);
+  foreach (x in inputs) {
+    check(serialize.bitsRequired64(0, x) == oracle(x), "bitsRequired64(0, " + x + ") is " + serialize.bitsRequired64(0, x) + ", want " + oracle(x));
+  }
+  check(serialize.bitsRequired64(0, 0) == 0, "bitsRequired64(0, 0)");
+}
+
 // signedToUnsigned takes int32 and unsignedToSigned takes uint32; an operand
 // outside its helper's domain is misuse.
 function TestZigZag32Domain() {

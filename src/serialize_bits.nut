@@ -57,10 +57,18 @@ local mask32 = function(k) { return k == 32 ? 0xffffffff : (1 << k) - 1; };
 
 // bitlen64(n): the number of bits of the unsigned 64-bit value n (stored in a
 // SQInteger). A negative n has the top bit set, so its unsigned bit length is
-// 64 (DESIGN.md (c): the unsigned reading).
+// 64 (DESIGN.md (c): the unsigned reading). Six comparisons at most, not one
+// step per bit: every ranged int prices its width here.
 local bitlen64 = function(n) {
-  local b = 0;
-  while (n != 0) { b++; n = n >>> 1; }
+  if (n == 0) return 0;
+  if (n < 0) return 64;
+  local b = 1;
+  if (n >= 0x100000000) { b += 32; n = n >>> 32; }
+  if (n >= 0x10000) { b += 16; n = n >>> 16; }
+  if (n >= 0x100) { b += 8; n = n >>> 8; }
+  if (n >= 0x10) { b += 4; n = n >>> 4; }
+  if (n >= 0x4) { b += 2; n = n >>> 2; }
+  if (n >= 0x2) { b += 1; }
   return b;
 };
 _M.bitlen64 <- bitlen64;
