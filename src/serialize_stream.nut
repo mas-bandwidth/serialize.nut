@@ -80,6 +80,11 @@ local arm = function(kind, family, method) {
   return m[kind][method];
 };
 
+// ARMS: the arms already resolved, once per stream kind and family, so a
+// serialize call is a table lookup rather than a name build, a validation
+// walk, a load and two table tests (DESIGN.md (h), the lazy dispatch)
+local ARMS = { write = {}, read = {}, measure = {} };
+
 // a blob reports typeof "blob" (its _typeof), and is an instance of ::blob
 local isBlob = function(b) { return typeof b == "blob" && b instanceof ::blob; };
 
@@ -121,8 +126,22 @@ class Stream {
   }
 
   // _arm(family, method): this stream's arm of method, or the
-  // not-implemented error; every serialize method dispatches through it
-  function _arm(family, method) { return arm(_kind, family, method); }
+  // not-implemented error; every serialize method dispatches through it. The
+  // first call for a family resolves the arm and caches it for this kind, so
+  // later calls skip the loader, the name check and the module lookups.
+  function _arm(family, method) {
+    local byFamily = ARMS[_kind];
+    if (byFamily == null) return arm(_kind, family, method);
+    local arms = byFamily[family];
+    if (arms == null) {
+      arms = {};
+      byFamily[family] <- arms;
+    }
+    if (method in arms) return arms[method];
+    local fn = arm(_kind, family, method);
+    arms[method] <- fn;
+    return fn;
+  }
 
   // --- the dispatch: every serialize method of serialize.go v2.0.0's
   // Stream, in serialize.js's spelling (DESIGN.md (a)) -------------------

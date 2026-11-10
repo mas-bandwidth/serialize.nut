@@ -75,18 +75,19 @@ local writeRange = function(s, value, min, max) {
   return true;
 };
 
-// readRange(s, min, max): a { ok, value } prefix read. The width is checked
-// before it reads, and an offset past the range is ValueOutOfRange after its
-// bits are counted, exactly as serialize.go's ReadStream.SerializeInt.
+// readRange(s, min, max): a prefix read, null when it refuses, otherwise the
+// value. The width is checked before it reads, and an offset past the range is
+// ValueOutOfRange after its bits are counted, exactly as serialize.go's
+// ReadStream.SerializeInt.
 local readRange = function(s, min, max) {
   local bits = rangeBits(min, max);
-  if (!s._room(bits)) return { ok = false };
+  if (!s._room(bits)) return null;
   local offset = bits > 0 ? s._take(bits) : 0;
   if (offset > max - min) {
     s._fail(E.ValueOutOfRange);
-    return { ok = false };
+    return null;
   }
-  return { ok = true, value = min + offset };
+  return min + offset;
 };
 
 local stringToBlob = function(str) {
@@ -249,9 +250,8 @@ local putString = function(s, h, bufferSize) {
 local readString = function(s, h, bufferSize) {
   if (s.error() != null) return false;
   if (!bufferSizeIsValid(bufferSize) || typeof h != "table" || !("value" in h)) return s._fail(E.ValueOutOfRange);
-  local r = readRange(s, 0, bufferSize - 1);
-  if (!r.ok) return false;
-  local length = r.value;
+  local length = readRange(s, 0, bufferSize - 1);
+  if (length == null) return false;
   local align = s.alignBits();
   if (align > 0) {
     if (!s._room(align)) return false;
