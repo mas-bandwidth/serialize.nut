@@ -80,6 +80,7 @@ local measure = {};
 // the value is the range (STANDARD.md int). A value outside [min,max] is
 // write misuse: it traps and writes nothing (IMPLEMENTING.md U9; DESIGN.md (g)).
 write.serializeInt <- function(s, h, min, max) {
+  if (typeof h != "table" || typeof h.value != "integer") return s._fail(SerializeError.ValueOutOfRange);
   if (min < INT32_MIN || max > INT32_MAX) throw PANIC_INT32;
   if (min > max) throw PANIC_MINMAX;
   local v = h.value;
@@ -111,6 +112,7 @@ read.serializeInt <- function(s, h, min, max) {
 };
 
 measure.serializeInt <- function(s, h, min, max) {
+  if (typeof h != "table" || typeof h.value != "integer") return s._fail(SerializeError.ValueOutOfRange);
   if (min < INT32_MIN || max > INT32_MAX) throw PANIC_INT32;
   if (min > max) throw PANIC_MINMAX;
   local v = h.value;
@@ -126,6 +128,7 @@ measure.serializeInt <- function(s, h, min, max) {
 // or fewer the offset is a single group; otherwise the low 32 bits are written
 // first, then the remaining bits - 32 high bits (STANDARD.md int64).
 write.serializeInt64 <- function(s, h, min, max) {
+  if (typeof h != "table" || typeof h.value != "integer") return s._fail(SerializeError.ValueOutOfRange);
   if (min > max) throw PANIC_MINMAX;
   local v = h.value;
   if (v < min || v > max) return s._fail(SerializeError.ValueOutOfRange);
@@ -169,6 +172,7 @@ read.serializeInt64 <- function(s, h, min, max) {
 };
 
 measure.serializeInt64 <- function(s, h, min, max) {
+  if (typeof h != "table" || typeof h.value != "integer") return s._fail(SerializeError.ValueOutOfRange);
   if (min > max) throw PANIC_MINMAX;
   local v = h.value;
   if (v < min || v > max) return s._fail(SerializeError.ValueOutOfRange);

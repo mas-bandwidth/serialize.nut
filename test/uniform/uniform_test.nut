@@ -102,6 +102,8 @@ function TestU7ReadNeverTraps() {
     { what = "string holder not a table", call = function(rs, h) { return rs.serializeString(null, 8); } },
     { what = "bytes into a non-blob", call = function(rs, h) { return rs.serializeBytes([1, 2]); } },
     { what = "compressed float min >= max", call = function(rs, h) { return rs.serializeCompressedFloat(h, 1.0, 1.0, 0.01); } },
+    { what = "compressed float (max - min) / resolution not finite", call = function(rs, h) { return rs.serializeCompressedFloat(h, 0.0, 1e30, 1e-30); } },
+    { what = "compressed float resolution NaN", call = function(rs, h) { return rs.serializeCompressedFloat(h, 0.0, 10.0, 0.0 / 0.0); } },
     { what = "compressed float bits inconsistent", call = function(rs, h) { return rs.serializeCompressedFloatPrecomputed(h, params.maxIntegerValue, params.bits + 1, params.delta, 0.0); } },
     { what = "compressed float maxIntegerValue 0", call = function(rs, h) { return rs.serializeCompressedFloatPrecomputed(h, 0, 0, params.delta, 0.0); } },
     { what = "compressed float maxIntegerValue above 4294967040", call = function(rs, h) { return rs.serializeCompressedFloatPrecomputed(h, 0xFFFFFFFF, 32, params.delta, 0.0); } },
@@ -252,13 +254,20 @@ local misuses = function(serialize) {
   return [
     { what = "int above max", call = function(s) { return s.serializeInt({ value = 11 }, 0, 10); } },
     { what = "int below min", call = function(s) { return s.serializeInt({ value = -1 }, 0, 10); } },
+    { what = "int value not an integer", call = function(s) { return s.serializeInt({ value = 3.7 }, 0, 10); } },
     { what = "int degenerate range, other value", call = function(s) { return s.serializeInt({ value = 4 }, 5, 5); } },
     { what = "int64 above max", call = function(s) { return s.serializeInt64({ value = 0x100000000 }, 0, 0xFFFFFFFF); } },
+    { what = "int64 value not an integer", call = function(s) { return s.serializeInt64({ value = 3.7 }, 0, 10); } },
     { what = "int128 above max", call = function(s) { return s.serializeInt128({ value = [11, 0] }, [0, 0], [10, 0]); } },
+    { what = "int128 value not a two-lane integer array", call = function(s) { return s.serializeInt128({ value = [1] }, [0, 0], [10, 0]); } },
+    { what = "uint128 value not a two-lane integer array", call = function(s) { return s.serializeUint128({ value = [1] }); } },
     { what = "fixed64 raw above max", call = function(s) { return s.serializeFixed64({ value = 0x7FFFFFFF }, 16, 16, -1, 1); } },
     { what = "fixed128 raw above max", call = function(s) { return s.serializeFixed128({ value = [0, 0x7FFFFFFF] }, 64, 64, -1, 1); } },
     { what = "int_relative current not above previous", call = function(s) { return s.serializeIntRelative(5, { value = 5 }); } },
     { what = "int_relative current past int32", call = function(s) { return s.serializeIntRelative(5, { value = 0x80000000 }); } },
+    { what = "int_relative current not an integer", call = function(s) { return s.serializeIntRelative(10, { value = 12.0 }); } },
+    { what = "int_relative current not an integer, absolute tier", call = function(s) { return s.serializeIntRelative(0, { value = 100000.5 }); } },
+    { what = "int_relative previous and current not integers", call = function(s) { return s.serializeIntRelative(1.5, { value = 2.5 }); } },
     { what = "bits 3 of 8", call = function(s) { return s.serializeBits({ value = 8 }, 3); } },
     { what = "bits 3 of -1", call = function(s) { return s.serializeBits({ value = -1 }, 3); } },
     { what = "bits64 40 of 2^40", call = function(s) { return s.serializeBits64({ value = 0x10000000000 }, 40); } },
@@ -334,6 +343,26 @@ function TestU9WriteMisuseTraps() {
   ws = serialize.WriteStream(blob(8));
   check(ws.serializeObject(refusing) == false && ws.error() == null, "a refusing object on a write latched " + ws.error());
   check(ws.serializeBool({ value = true }) && ws.bitsProcessed() == 1, "a write after a refusing object failed");
+  // flush ends the write: a later bits or bytes write traps, on a 16-byte and
+  // an 8-byte buffer, and moves no bit
+  local afters = [
+    { what = "bits", call = function(s) { return s.serializeUint8({ value = 0xCD }); } },
+    { what = "bytes", call = function(s) { return s.serializeBytes(blob(1)); } },
+  ];
+  foreach (size in [ 16, 8 ]) {
+    foreach (a in afters) {
+      local what = a.what + " after flush on a " + size + "-byte buffer";
+      local fs = serialize.WriteStream(blob(size));
+      check(fs.serializeUint8({ value = 0xAB }), what + ": the first write");
+      fs.flush();
+      local got = null;
+      try { a.call(fs); } catch (e) { got = e; }
+      check(got == "serialize: write misuse: a write after flush", what + ": trapped with " + got);
+      check(fs.error() == null && fs.bitsProcessed() == 8, what + ": latched " + fs.error() + " or moved bits");
+      local d = fs.data();
+      check(d.len() == 1 && d[0] == 0xAB, what + ": the written bytes changed");
+    }
+  }
 }
 
 // U6: a measure makes every check a write makes, except room and buffer size,
