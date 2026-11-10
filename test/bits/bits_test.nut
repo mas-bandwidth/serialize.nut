@@ -10,6 +10,17 @@ local check = function(cond, what) {
   if (!cond) throw "TestSerializeBits: " + what;
 };
 
+// raises(fn, prefix, what): fn() throws a string starting with prefix. fn is
+// called directly, never through .call or acall: sq prints a throw that
+// crosses a native call to stderr even when it is caught (DESIGN.md (i)).
+local raises = function(fn, prefix, what) {
+  local got = null;
+  try { fn(); } catch (e) { got = e; }
+  check(got != null, what + ": did not raise");
+  check(typeof got == "string" && got.len() >= prefix.len() && got.slice(0, prefix.len()) == prefix,
+    what + ": raised " + got + ", want " + prefix);
+};
+
 local trim = function(s) {
   local a = 0, b = s.len();
   while (a < b && (s[a] == ' ' || s[a] == '\t')) a++;
@@ -466,4 +477,29 @@ function TestSerializeBits() {
     while (S.Until(ws2, {value = done})) throw "TestSerializeBits: the loop body ran for an empty sequence";
   }
   check(ws2.bitsProcessed() == 1, "an empty until sequence should cost 1 bit");
+}
+
+// bitsRequired prices a uint32 span: its bounds stay in [0, 2^32 - 1] and
+// min <= max, and a width past 32 bits is misuse.
+function TestBitsRequiredBounds() {
+  local serialize = dofile(::SERIALIZE_ROOT + "/src/serialize.nut", true);
+  check(serialize.bitsRequired(0, 0xFFFFFFFF) == 32, "bitsRequired(0, 2^32 - 1)");
+  check(serialize.bitsRequired(0, 0x80000000) == 32, "bitsRequired(0, 2^31)");
+  raises(function() { serialize.bitsRequired(0, 0x100000000); }, "serialize: ", "bitsRequired max past uint32");
+  raises(function() { serialize.bitsRequired(-1, 0); }, "serialize: ", "bitsRequired min below uint32");
+  raises(function() { serialize.bitsRequired(5, 3); }, "serialize: ", "bitsRequired min greater than max");
+}
+
+// signedToUnsigned takes int32 and unsignedToSigned takes uint32; an operand
+// outside its helper's domain is misuse.
+function TestZigZag32Domain() {
+  local serialize = dofile(::SERIALIZE_ROOT + "/src/serialize.nut", true);
+  check(serialize.signedToUnsigned(0x7FFFFFFF) == 0xFFFFFFFE, "signedToUnsigned(2^31 - 1)");
+  check(serialize.signedToUnsigned(-0x80000000) == 0xFFFFFFFF, "signedToUnsigned(-2^31)");
+  raises(function() { serialize.signedToUnsigned(0x100000001); }, "serialize: ", "signedToUnsigned above int32");
+  raises(function() { serialize.signedToUnsigned(-0x80000001); }, "serialize: ", "signedToUnsigned below int32");
+  check(serialize.unsignedToSigned(0xFFFFFFFF) == -0x80000000, "unsignedToSigned(2^32 - 1)");
+  check(serialize.unsignedToSigned(1) == -1, "unsignedToSigned(1)");
+  raises(function() { serialize.unsignedToSigned(0x100000001); }, "serialize: ", "unsignedToSigned above uint32");
+  raises(function() { serialize.unsignedToSigned(-1); }, "serialize: ", "unsignedToSigned below uint32");
 }
