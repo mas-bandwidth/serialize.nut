@@ -1,7 +1,7 @@
 // TestDifferentialAgainstSerializeGo: serialize-squirrel-fuzz-differential.
 //
 // A fuzz differential of the Squirrel port against its reference,
-// github.com/mas-bandwidth/serialize.go/v2 v2.0.0 (DESIGN.md, Pins), format 2.0.
+// github.com/mas-bandwidth/serialize.go/v2 v2.1.1, format 2.0.
 // From a FIXED seed (math/rand/v2 PCG with constant seeds; no clock) it
 // generates 2000 random programs, each a sequence of 1 to 24 operations drawn
 // from every operation serialize.go has, with values in range (finite floats
@@ -25,9 +25,10 @@
 //  4. For 1 in 8 programs whose bytes exceed one 8-byte word, both writers
 //     write into a buffer one word too short and must stop at the same step:
 //     the Squirrel writer traps (IMPLEMENTING.md U9, U10; DESIGN.md (g)) exactly
-//     where serialize.go's WriteStream returns ErrPastEnd, and fuzz/driver.nut
-//     answers that room trap as past_end; any other trap answers trap, which
-//     never agrees.
+//     where serialize.go v2.1.1's WriteStream panics with a bit-writer overflow.
+//     goWrite recovers that room trap and answers past_end at the trapping step,
+//     matching fuzz/driver.nut. Any other Go panic is re-raised. The driver's
+//     any other trap answers trap, which never agrees. The comparison still runs.
 //
 // The driver takes programs as text, one interpreter process per batch of 100
 // programs, the batch in a file in a t.TempDir() (the card's batching; the
@@ -562,6 +563,7 @@ type runner struct {
 	vals     []string
 	endBits  []int64
 	failIdx  int
+	at       int // the step whose call is in progress; a room trap reports this
 	sabotage bool
 }
 
@@ -579,6 +581,7 @@ func (r *runner) run(s serialize.Stream, from, to int) (int, error) {
 	i := from
 	for i < to {
 		st := &r.steps[i]
+		r.at = i
 		if st.kind == "object" {
 			r.vals[i] = "-"
 			if err := s.SerializeObject(&object{r: r, from: i + 1, to: i + 1 + st.width}); err != nil {
@@ -785,14 +788,33 @@ type result struct {
 	endBits []int64
 }
 
-func goWrite(steps []step, capacity int, sabotage bool) result {
-	r := &runner{steps: steps, vals: make([]string, len(steps)), endBits: make([]int64, len(steps)), failIdx: -1, sabotage: sabotage}
+// writeOverflow is serialize.go v2.1.1's room trap (panicWriteOverflow). v2.0.1
+// returned ErrPastEnd from WriteStream on the same short-buffer write. v2.1.1
+// panics before any bit of the operation is written. fuzz/driver.nut answers
+// that room trap as past_end; goWrite does the same, and the comparison runs.
+const writeOverflow = "serialize: bit writer overflow"
+
+func goWrite(steps []step, capacity int, sabotage bool) (res result) {
+	r := &runner{steps: steps, vals: make([]string, len(steps)), endBits: make([]int64, len(steps)), failIdx: -1, at: -1, sabotage: sabotage}
+	defer func() {
+		p := recover()
+		if p == nil {
+			return
+		}
+		msg, ok := p.(string)
+		if !ok || msg != writeOverflow || r.at < 0 {
+			panic(p)
+		}
+		res = result{idx: r.at, kind: "past_end"}
+	}()
 	ws := serialize.NewWriteStream(make([]byte, capacity))
 	if _, err := r.run(ws, 0, len(steps)); err != nil {
-		return result{idx: r.failIdx, kind: errKind(err)}
+		res = result{idx: r.failIdx, kind: errKind(err)}
+		return
 	}
 	ws.Flush()
-	return result{ok: true, bytes: append([]byte(nil), ws.Data()...), bits: ws.BitsProcessed(), endBits: r.endBits}
+	res = result{ok: true, bytes: append([]byte(nil), ws.Data()...), bits: ws.BitsProcessed(), endBits: r.endBits}
+	return
 }
 
 func goRead(steps []step, data []byte) result {
@@ -1346,7 +1368,7 @@ func mutate(g *gen, b []byte) ([]byte, string) {
 }
 
 // TestDifferentialStringConversion verifies differential agreement between
-// serialize.go v2.0.0 and the Squirrel port across string conversion cases:
+// serialize.go v2.1.1 and the Squirrel port across string conversion cases:
 // empty, ASCII across 4-byte leaf and midpoint split boundaries, multibyte and
 // high-bit UTF-8 straddling split boundaries, UTF-8 BOM, Unicode noncharacters,
 // maximum agreed length (bufferSize - 1), truncation, and invalid NUL/UTF-8
@@ -1374,10 +1396,10 @@ func differentialStringConversion(t *testing.T, sq, root, driver string) {
 	t.Helper()
 
 	type validCase struct {
-		name      string
-		preBits   int
-		bufSize   int
-		payload   []byte
+		name    string
+		preBits int
+		bufSize int
+		payload []byte
 	}
 	var valid []validCase
 
