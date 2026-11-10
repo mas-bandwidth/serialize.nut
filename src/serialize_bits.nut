@@ -28,6 +28,11 @@ local validReadHolder = _M.validReadHolder;
 // misuse raises serialize.go's panic text).
 local PANIC_BITS_RANGE = "serialize: bits must be in [1,32]";
 local PANIC_BITS_RANGE64 = "serialize: bits must be in [1,64]";
+// the helpers take a uint32 or an int32 in serialize.go; an operand outside
+// that domain is API misuse, so the port traps (DESIGN.md (g)).
+local PANIC_BITS_REQUIRED = "serialize: bitsRequired bounds must be in [0, 4294967295] and min must not be greater than max";
+local PANIC_SIGNED_TO_UNSIGNED = "serialize: signedToUnsigned operand must be in [-2147483648, 2147483647]";
+local PANIC_UNSIGNED_TO_SIGNED = "serialize: unsignedToSigned operand must be in [0, 4294967295]";
 
 // badBits(bits, top): the bit count is not an integer in [1, top], a bad
 // declaration on every stream (IMPLEMENTING.md U16): write and measure raise,
@@ -72,10 +77,13 @@ local u128len = function(a) {
 // THE EXPORTS (DESIGN.md (h)): range pricing and zigzag, as serialize.go's
 // BitsRequired, BitsRequired64, BitsRequired128, SignedToUnsigned and
 // UnsignedToSigned (serialize.go's serialize.go). min == max costs zero bits
-// (STANDARD.md, int: a degenerate range costs zero bits).
+// (STANDARD.md, int: a degenerate range costs zero bits). bitsRequired prices
+// a uint32 span: both bounds in [0, 4294967295] and min <= max, so the span
+// is a full 32 bits at most.
 _M.bitsRequired <- function(min, max) {
+  if (min < 0 || max > 0xffffffff || min > max) throw PANIC_BITS_REQUIRED;
   if (min == max) return 0;
-  return bitlen(lanes().sub64(max, min));
+  return bitlen(max - min);
 };
 _M.bitsRequired64 <- function(min, max) {
   if (min == max) return 0;
@@ -88,15 +96,18 @@ _M.bitsRequired128 <- function(min, max) {
 // signedToUnsigned / unsignedToSigned: serialize.go v2.0.0's int32 / uint32
 // zig-zag (serialize.go's serialize.go: SignedToUnsigned uses uint32(n) << 1
 // ^ (0 - uint32(n) >> 31), UnsignedToSigned uses (n >> 1) ^ (0 - (n & 1)).
-// The operand is masked to the low 32 bits first so a negative int32's upper
-// 32 bits do not leak into the result (DESIGN.md (c): uint64 is the same
-// bits; the zig-zag is 32-bit).
+// The operand stays inside its helper's domain, int32 for signedToUnsigned
+// and uint32 for unsignedToSigned; the low 32 bits are then taken so a
+// negative int32's upper 32 bits do not leak into the result (DESIGN.md (c):
+// uint64 is the same bits; the zig-zag is 32-bit).
 _M.signedToUnsigned <- function(n) {
+  if (n < -0x80000000 || n > 0x7fffffff) throw PANIC_SIGNED_TO_UNSIGNED;
   local x = n & 0xffffffff;
   local lo = (x << 1) & 0xffffffff;
   return (x >>> 31) != 0 ? lo ^ 0xffffffff : lo;
 };
 _M.unsignedToSigned <- function(n) {
+  if (n < 0 || n > 0xffffffff) throw PANIC_UNSIGNED_TO_SIGNED;
   local u = n & 0xffffffff;
   local r = (u & 1) != 0 ? (u >>> 1) ^ 0xffffffff : (u >>> 1);
   return (r & 0x80000000) != 0 ? r - 0x100000000 : r;
