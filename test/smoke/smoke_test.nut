@@ -34,6 +34,16 @@ local writeText = function(path, text) {
   f.close();
 };
 
+local exists = function(path) {
+  try {
+    local f = file(path, "rb");
+    f.close();
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
 // loadModule(root, name): a module loaded the way a host that vendors one file
 // does (DESIGN.md (f)): vargv[0] is the exports table and vargv[1] the loader's
 // require.
@@ -72,8 +82,14 @@ function TestSmoke() {
   // LOADING IS CLOSED (DESIGN.md (f)): a shadowing serialize_stream.nut in the
   // working directory and one level above src is never loaded. Each shadow
   // raises when run, which is proved first, so a load of either would raise.
-  local shadows = [ "serialize_stream.nut", root + "/serialize_stream.nut" ];
+  // The proof runs in a copy of src/ in this test's scratch directory, so the
+  // repository root is never written.
+  local scratch = root + "/build/test/smoke/TestSmoke/shadow";
+  check(system("rm -rf '" + scratch + "' && mkdir -p '" + scratch + "/src' && cp '" + root + "/src/'*.nut '" + scratch + "/src/'") == 0,
+    "could not make " + scratch);
+  local shadows = [ "serialize_stream.nut", scratch + "/serialize_stream.nut" ];
   foreach (path in shadows) writeText(path, "throw \"SHADOW \" + \"" + path + "\";\n");
+  check(!exists(root + "/serialize_stream.nut"), "the shadow test wrote serialize_stream.nut into the repository root");
   local failure = null;
   local serialize = null;
   try {
@@ -81,7 +97,7 @@ function TestSmoke() {
       local shadow = loadfile(path, true);
       raises(function() { shadow(); }, "SHADOW", "the shadow at " + path);
     }
-    serialize = dofile(root + "/src/serialize.nut", true);
+    serialize = dofile(scratch + "/src/serialize.nut", true);
   } catch (e) {
     failure = e;
   }
@@ -93,10 +109,11 @@ function TestSmoke() {
   // separator is refused by name instead of resolving from the working
   // directory.
   local entry = readText(root + "/src/serialize.nut");
-  local backslash = root + "/src\\smoke_backslash_entry.nut";
+  local backslash = scratch + "/src\\smoke_backslash_entry.nut";
   local bare = "smoke_bare_entry.nut";
   writeText(backslash, entry);
   writeText(bare, entry);
+  check(!exists(root + "/src\\smoke_backslash_entry.nut"), "the entry test wrote into the repository root");
   local backslashFn = loadfile(backslash, true);
   local bareFn = loadfile(bare, true);
   local viaBackslash = null;
@@ -106,7 +123,9 @@ function TestSmoke() {
   try { bareFn(); } catch (e) { bareError = e; }
   remove(backslash);
   remove(bare);
+  check(system("rm -rf '" + scratch + "'") == 0, "could not remove " + scratch);
   if (backslashError != null) throw backslashError;
+  serialize = dofile(root + "/src/serialize.nut", true);
   check(typeof viaBackslash == "table", "a backslash entry returned " + typeof viaBackslash + ", not the API table");
   check(viaBackslash.WriteStream(blob(16)).isWriting(), "a backslash entry's WriteStream direction");
   check(bareError != null, "a bare entry did not raise");
