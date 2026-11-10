@@ -124,33 +124,6 @@ local cmpVal = function(got, expected, is128) {
   return got == expected;
 };
 
-// bitlen64(x): the number of bits needed to represent the unsigned 64-bit
-// value x (0 for zero, 64 when the top bit is set). Used for the known-answer
-// width checks below (serialize.go TestBitsRequired / TestBitsRequired64).
-local bitlen64 = function(x) {
-  if (x == 0) return 0;
-  if (x < 0) return 64;
-  local n = 1;
-  local v = x;
-  if (v >= 0x100000000) { n += 32; v = v >>> 32; }
-  if (v >= 0x10000) { n += 16; v = v >>> 16; }
-  if (v >= 0x100) { n += 8; v = v >>> 8; }
-  if (v >= 0x10) { n += 4; v = v >>> 4; }
-  if (v >= 0x4) { n += 2; v = v >>> 2; }
-  if (v >= 0x2) { n += 1; }
-  return n;
-};
-
-local br32 = function(min, max) {
-  if (min == max) return 0;
-  return bitlen64(sub64(max, min) & 0xFFFFFFFF);
-};
-
-local br64 = function(min, max) {
-  if (min == max) return 0;
-  return bitlen64(sub64(max, min));
-};
-
 // --- text and bytes helpers -------------------------------------------------
 local strip = function(s) {
   local a = 0, b = s.len();
@@ -298,7 +271,7 @@ function TestSerializeInt() {
     [0, 7, 3], [0, 8, 4], [0, 255, 8], [0, 65535, 16], [0, 4294967295, 32]
   ];
   foreach (c in br) {
-    local got = br32(c[0], c[1]);
+    local got = serialize.bitsRequired(c[0], c[1]);
     check(got == c[2], "bitsRequired(" + c[0] + "," + c[1] + ") = " + got + ", want " + c[2]);
   }
 
@@ -310,8 +283,38 @@ function TestSerializeInt() {
     [-5000000000, 5000000000, 34]
   ];
   foreach (c in br64cases) {
-    local got = br64(c[0], c[1]);
+    local got = serialize.bitsRequired64(c[0], c[1]);
     check(got == c[2], "bitsRequired64(" + c[0] + "," + c[1] + ") = " + got + ", want " + c[2]);
+  }
+
+  // serialize.go TestBitsRequired128 (known answers, in the uint128 domain;
+  // [lo, hi] pairs)
+  local br128cases = [
+    [[0, 0], [0, 0], 0], [[0, 0], [1, 0], 1], [[0, 0], [255, 0], 8],
+    [[0, 0], [-1, 0], 64], [[0, 0], [0, 1], 65], [[0, 0], [-1, -1], 128],
+    [[-1, 0], [0, 1], 1], [[5, 7], [5, 7], 0], [[0, 0x8000000000000000], [-1, 0x7FFFFFFFFFFFFFFF], 128]
+  ];
+  foreach (c in br128cases) {
+    local got = serialize.bitsRequired128(c[0], c[1]);
+    check(got == c[2], "bitsRequired128 case " + c[2] + " = " + got);
+  }
+
+  // zig-zag (serialize.go SignedToUnsigned / UnsignedToSigned, 32-bit)
+  local zz = [
+    [0, 0], [-1, 1], [1, 2], [-2, 3], [2, 4],
+    [2147483647, 0xFFFFFFFE], [-2147483648, 0xFFFFFFFF]
+  ];
+  foreach (c in zz) {
+    local u = serialize.signedToUnsigned(c[0]);
+    check(u == c[1], "signedToUnsigned(" + c[0] + ") = " + u + ", want " + c[1]);
+    local s = serialize.unsignedToSigned(c[1]);
+    check(s == c[0], "unsignedToSigned(" + c[1] + ") = " + s + ", want " + c[0]);
+  }
+
+  // uint128From64: zero-extends, never sign-extends
+  foreach (c in [[0, [0, 0]], [1, [1, 0]], [-1, [-1, 0]], [0x8000000000000000, [0x8000000000000000, 0]]]) {
+    local got = serialize.uint128From64(c[0]);
+    check(got[0] == c[1][0] && got[1] == c[1][1], "uint128From64(" + c[0] + ")");
   }
 
   // serialize.go TestSerializeInt64FullRange: ranges wider than 2^63, spans

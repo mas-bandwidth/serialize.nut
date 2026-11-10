@@ -5,7 +5,7 @@
 //       independent bit-by-bit LSB-first oracle written here, never the code
 //       under test (STANDARD.md, General Conventions);
 //   (2) serialize.go v1.15.1's TestBitpacker sequence, byte for byte
-//       (.ref/serialize.go/serialize_test.go);
+//       (serialize_test.go in mas-bandwidth/serialize.go);
 //   (3) readBits round-trips (1);
 //   (4) a read past the end is refused by wouldReadPastEnd and raises the bit
 //       reader's misuse error, and data of 0..9 bytes never reads outside

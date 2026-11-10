@@ -1,5 +1,5 @@
-// The 2026-10-27 audit's int findings (DESIGN.md (c), "the library never
-// overflows"; the nut heading of the audit ledger), one Test per finding:
+// The int findings of the 2.1.0 audit (DESIGN.md (c), "the library never
+// overflows"), one Test per finding:
 //
 //   TestInt128WideRangeRead     a ranged int128 read over [1, 2^64] whose
 //                               offset is 2^63 - 1 decodes to 2^63. Before

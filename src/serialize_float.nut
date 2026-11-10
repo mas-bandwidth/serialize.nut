@@ -21,8 +21,13 @@
 // infinity, is refused too. All of it is integer surgery on the bits of
 // castf2i(x): the blob library's castf2i/casti2f reinterpret without
 // conversion, and the 'f' view of a blob is never used (DESIGN.md (e)).
+if (_intsize_ != 8 || _floatsize_ != 8) {
+  throw "serialize: refuses this VM: _intsize_ " + _intsize_ + " and _floatsize_ " + _floatsize_ +
+    ", the library needs 8 and 8 (Squirrel built sq64 with -DSQUSEDOUBLE; DESIGN.md (c))";
+}
 local _M = vargv[0];
 local require = vargv[1];
+local validReadHolder = require("serialize_bits").validReadHolder;
 
 local SerializeError = require("serialize_stream").SerializeError;
 
@@ -157,19 +162,21 @@ local write = {
 // written (STANDARD.md, Finite values only; Reader Obligations)
 local read = {
   serializeFloat = function(s, h) {
+    if (!validReadHolder(h)) return s._fail(SerializeError.ValueOutOfRange);
     if (!s._room(32)) return false;
     local bits = s._take(32);
     if (!floatBitsAreFinite(bits)) return s._fail(SerializeError.NonFiniteFloat);
-    h.value <- float32FromBits(bits);
+    h.value = float32FromBits(bits);
     return true;
   },
   serializeDouble = function(s, h) {
+    if (!validReadHolder(h)) return s._fail(SerializeError.ValueOutOfRange);
     if (!s._room(64)) return false;
     local lo = s._take(32);
     local hi = s._take(32);
     local bits = lo | (hi << 32);
     if (!doubleBitsAreFinite(bits)) return s._fail(SerializeError.NonFiniteFloat);
-    h.value <- casti2f(bits);
+    h.value = casti2f(bits);
     return true;
   },
 };

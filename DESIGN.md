@@ -14,7 +14,7 @@ already decides.
 | the reference | `mas-bandwidth/serialize.go` tag `v2.0.0` (`a3ffd9136906dfc4db5b2fb6d146181d749b00c5`, module `github.com/mas-bandwidth/serialize.go/v2`), read, never imported by the library (the fuzz differential imports it) |
 | the closest worked example | `mas-bandwidth/serialize.js` main at `ff765a1a89a89dc3f6e818e553baabf189241b4e` (`src/index.js`, `src/streams.js`), read, never imported |
 | the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.1.1` (`bd3d67e23c8acc2c45eff69633dbe16c029a2cba`: format 2.0 unchanged; standard 2.1 adds the `rejected` refusal reason, the `reject` step and the U1-U16 rules of IMPLEMENTING.md, and 2.1.1 the U3, U6, U9 and U15 rulings; the corpus is unchanged since v2.1.0; `tools/revendor.sh <tag>` re-vendors them) |
-| the number, byte, float32 and loading rules | `mas-bandwidth/schema` `docs/PORT-SQUIRREL.md` at `f676cb9adc8a653abcdce38034e99ec3c3aad6b8` (branch `sprint/schema-squirrel-port-design.w1.g1.e21`), restated in (c) to (f) with no change of substance |
+| the number, byte, float32 and loading rules | `mas-bandwidth/schema` `docs/PORT-SQUIRREL.md` at `f676cb9adc8a653abcdce38034e99ec3c3aad6b8`, restated in (c) to (f) with no change of substance |
 | the interpreter | Squirrel 3.2, built `sq64` with `-DSQUSEDOUBLE` (`make dist-squirrel`) |
 
 **The vendored copies are the reference's copies.** `diff -r` of this
@@ -351,8 +351,8 @@ reads and writes one byte, 0..255), with `len`, `readblob`, `writeblob`,
   checks after the narrowing, so a finite double above float32's range, which
   narrows to an infinity, is refused too. `fround` of a NaN is the quiet
   float32 NaN of its sign: no payload is carried, because no NaN travels.
-- **A float32 write rounds exactly as Go's `float32()` does** (coordinator
-  ruling, 2026-10-17, shared with the Lua design and schema's leg). A double
+- **A float32 write rounds exactly as Go's `float32()` does** (the
+  same rule as the Lua port and schema's Squirrel port). A double
   that is not exactly a float32 is NOT refused: it is narrowed by IEEE-754
   round-to-nearest, ties-to-even, so the bytes are the reference's, byte for
   byte. The narrowing is integer arithmetic on the bits from `castf2i`: the 29
@@ -396,8 +396,7 @@ reads and writes one byte, 0..255), with `len`, `readblob`, `writeblob`,
 - **A non-finite compressed_float input TRAPS on write** (IMPLEMENTING.md
   U9, "`compressed_float`'s clamp is no exception"; STANDARD.md,
   compressed_float, "Non-finite inputs are non-conforming": "Conforming
-  writers assert in checked builds", Glenn verbatim "should assert out on
-  write too"). The value a `serializeCompressedFloat` or
+  writers assert in checked builds", and a write is one of them). The value a `serializeCompressedFloat` or
   `serializeCompressedFloatPrecomputed` write is given is `fround`ed first;
   if the result is NaN, `+inf` or `-inf` the arm traps with
   `serialize: compressed float value is not finite` before any bit moves,
@@ -411,7 +410,7 @@ reads and writes one byte, 0..255), with `len`, `readblob`, `writeblob`,
 
 ## (f) LOADING IS CLOSED
 
-Coordinator ruling, 2026-10-17 (shared with the Lua design and schema's leg):
+The rule (the same as the Lua port's and schema's Squirrel port's):
 loading resolves only the library's own directory. Nothing on any search path
 may be found, and no native module may load.
 

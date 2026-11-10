@@ -17,6 +17,13 @@ local require = vargv[1];
 
 local Err = require("serialize_stream").SerializeError;
 
+// Read holders are tables with an existing value slot (IMPLEMENTING.md U7).
+// Keep this internal helper shared by the primitive families.
+_M.validReadHolder <- function(h) {
+  return typeof h == "table" && "value" in h;
+};
+local validReadHolder = _M.validReadHolder;
+
 // panic text, verbatim from serialize.go's serialize.go (DESIGN.md (g): API
 // misuse raises serialize.go's panic text).
 local PANIC_BITS_RANGE = "serialize: bits must be in [1,32]";
@@ -183,6 +190,7 @@ write.serializeAlign <- function(s) {
 // a bad bit count on read refuses ValueOutOfRange after the failure state,
 // never a raise (IMPLEMENTING.md U7, U16)
 read.serializeBits <- function(s, h, bits) {
+  if (!validReadHolder(h)) return s._fail(Err.ValueOutOfRange);
   if (badBits(bits, 32)) return s._fail(Err.ValueOutOfRange);
   if (!s._room(bits)) return false;
   h.value = s._take(bits);
@@ -190,6 +198,7 @@ read.serializeBits <- function(s, h, bits) {
 }
 
 read.serializeBits64 <- function(s, h, bits) {
+  if (!validReadHolder(h)) return s._fail(Err.ValueOutOfRange);
   if (badBits(bits, 64)) return s._fail(Err.ValueOutOfRange);
   if (!s._room(bits)) return false;
   if (bits <= 32) {
@@ -201,27 +210,32 @@ read.serializeBits64 <- function(s, h, bits) {
 }
 
 read.serializeBool <- function(s, h) {
+  if (!validReadHolder(h)) return s._fail(Err.ValueOutOfRange);
   if (!s._room(1)) return false;
   h.value = s._take(1) != 0;
   return true;
 }
 
 read.serializeUint8 <- function(s, h) {
+  if (!validReadHolder(h)) return s._fail(Err.ValueOutOfRange);
   if (!s._room(8)) return false;
   h.value = s._take(8);
   return true;
 }
 read.serializeUint16 <- function(s, h) {
+  if (!validReadHolder(h)) return s._fail(Err.ValueOutOfRange);
   if (!s._room(16)) return false;
   h.value = s._take(16);
   return true;
 }
 read.serializeUint32 <- function(s, h) {
+  if (!validReadHolder(h)) return s._fail(Err.ValueOutOfRange);
   if (!s._room(32)) return false;
   h.value = s._take(32);
   return true;
 }
 read.serializeUint64 <- function(s, h) {
+  if (!validReadHolder(h)) return s._fail(Err.ValueOutOfRange);
   if (!s._room(64)) return false;
   h.value = s._take(32) | (s._take(32) << 32);
   return true;

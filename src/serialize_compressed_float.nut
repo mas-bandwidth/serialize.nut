@@ -17,6 +17,7 @@
 // step is never widened to double before the floor).
 local _M = vargv[0];
 local require = vargv[1];
+local validReadHolder = require("serialize_bits").validReadHolder;
 
 // fround (DESIGN.md (e)) narrows a double to the float32 Go's float32() gives.
 // DESIGN.md (h): compressed_float reaches serialize_float's fround through
@@ -134,6 +135,8 @@ local writePrecomputed = function(s, h, maxIntegerValue, bits, delta, min) {
 
 // the read arm's audited home (serialize.go compressedFloat32Precomputed)
 local readPrecomputed = function(s, h, maxIntegerValue, bits, delta, min) {
+  if (s._error != null) return false;
+  if (!validReadHolder(h) || (typeof min != "integer" && typeof min != "float")) return s._fail(SerializeError.ValueOutOfRange);
   if (!constantsAreValid(maxIntegerValue, bits, delta)) return s._fail(SerializeError.ValueOutOfRange);
   min = fround(min);
   if (!s._room(bits)) return false;
@@ -148,7 +151,7 @@ local readPrecomputed = function(s, h, maxIntegerValue, bits, delta, min) {
   // past FLT_MAX ([3*2^103, FLT_MAX] at 2^104 decodes its top integer to +inf).
   // Refused as non_finite_float, the holder untouched, whatever the declaration.
   if (isNotFinite(result)) return s._fail(SerializeError.NonFiniteFloat);
-  h.value <- result;
+  h.value = result;
   return true;
 };
 
@@ -164,6 +167,10 @@ local write = {
 
 local read = {
   serializeCompressedFloat = function(s, h, min, max, resolution) {
+    if (s._error != null) return false;
+    if (!validReadHolder(h) || (typeof min != "integer" && typeof min != "float") ||
+        (typeof max != "integer" && typeof max != "float") ||
+        (typeof resolution != "integer" && typeof resolution != "float")) return s._fail(SerializeError.ValueOutOfRange);
     local p = paramsOrPanic(min, max, resolution, true);
     if (typeof p == "string") return s._fail(SerializeError.ValueOutOfRange);
     return readPrecomputed(s, h, p.maxIntegerValue, p.bits, p.delta, min);
