@@ -34,7 +34,13 @@ local src = getstackinfos(1).src;
 local cut = -1;
 local at;
 while ((at = src.find("/", cut + 1)) != null) cut = at;
-local dir = cut < 0 ? "." : src.slice(0, cut);
+local slash = -1;
+while ((at = src.find("\\", slash + 1)) != null) slash = at;
+if (slash > cut) cut = slash;
+if (cut < 0) {
+  throw "serialize: the entry path " + src + " has no directory separator; the loader resolves modules beside the entry (DESIGN.md (f))";
+}
+local dir = src.slice(0, cut);
 
 local isName = function(name) {
   if (typeof name != "string" || name.len() == 0) return false;
