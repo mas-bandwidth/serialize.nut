@@ -186,7 +186,7 @@ local putBytes = function(s, data) {
   local n = data.len();
   if (!s._room(align + 8 * n)) return false;
   if (align > 0) s._put(0, align);
-  if (n > 0) s._putBytes(data, 0, n);
+  s._putBytes(data, 0, n);
   return true;
 };
 
@@ -231,7 +231,7 @@ local putString = function(s, h, bufferSize) {
   if (!writeRange(s, length, 0, bufferSize - 1)) return false;
   align = s.alignBits();
   if (align > 0) s._put(0, align);
-  if (length > 0) s._putBytes(bytes, 0, length);
+  s._putBytes(bytes, 0, length);
   return true;
 };
 
