@@ -332,10 +332,10 @@ function TestVersionReferences() {
   local stream = read(root + "/src/serialize_stream.nut");
   local endTest = read(root + "/test/end/end_test.nut");
   local here = read(root + "/test/bitpacker/bitpacker_test.nut");
-  check(serialize.version == "v2.1.2", "the API does not export the port version v2.1.2");
-  check(source.find("v2.1.2") != null, "serialize.nut does not name the port version v2.1.2");
+  check(serialize.version == "v2.1.3", "the API does not export the port version v2.1.3");
+  check(source.find("v2.1.3") != null, "serialize.nut does not name the port version v2.1.3");
   check(source.find("v2.1.4") != null, "serialize.nut does not name the vendored release v2.1.4");
-  check(readme.find("v2.1.2") != null, "README.md does not name the port version v2.1.2");
+  check(readme.find("v2.1.3") != null, "README.md does not name the port version v2.1.3");
   check(readme.find("v2.1.4") != null, "README.md does not name the vendored release v2.1.4");
   check(design.find("tag `v2.1.4`") != null, "DESIGN.md does not name the vendored release v2.1.4");
   check(design.find("| serialize.go v2.0.0 |") != null, "DESIGN.md does not name the reference pin serialize.go v2.0.0");
