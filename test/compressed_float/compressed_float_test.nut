@@ -140,6 +140,15 @@ local parseRecords = function(text) {
 function TestSerializeCompressedFloat() {
   local root = ::SERIALIZE_ROOT;
   local serialize = dofile(root + "/src/serialize.nut", true);
+  // the float module's float32Bits, loaded the way the closed loader does
+  // (DESIGN.md (f)): vargv[0] is the exports table, vargv[1] the require
+  local srcRequire;
+  srcRequire = function(name, who = null) {
+    local m = {};
+    loadfile(root + "/src/" + name + ".nut", true).bindenv(::getroottable())(m, srcRequire);
+    return m;
+  };
+  local float32Bits = srcRequire("serialize_float").float32Bits;
 
   // (1) the corpus
   local corpusText = readText(root + "/conformance/compressed_float.txt");
@@ -178,7 +187,7 @@ function TestSerializeCompressedFloat() {
       local wantBits = want.tointeger(16) & 0xFFFFFFFF;
       local ok = rs.serializeCompressedFloat(holder, min, max, res);
       check(ok == true, rec.name + ": an accepted read failed with " + rs.error());
-      local gotBits = serialize.float32Bits(holder.value);
+      local gotBits = float32Bits(holder.value);
       check(gotBits == wantBits,
         rec.name + ": decoded 0x" + format("%08x", gotBits) + ", want 0x" + format("%08x", wantBits));
       if ("consumed" in rec) {

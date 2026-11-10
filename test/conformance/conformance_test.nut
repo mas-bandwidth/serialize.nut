@@ -540,7 +540,7 @@ local runStep = function(stream, s) {
   if (kind == "string") {
     local h = { value = s.text };
     local ok = stream.serializeString(h, s.width);
-    if (ok) s.text = h.value;
+    s.text = h.value;
     return ok;
   }
   if (kind == "fixed") {
