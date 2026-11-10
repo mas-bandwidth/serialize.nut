@@ -78,7 +78,7 @@ function TestSmoke() {
   // separator is refused by name instead of resolving from the working
   // directory.
   local entry = readText(root + "/src/serialize.nut");
-  local backslash = "../src\\smoke_backslash_entry.nut";
+  local backslash = root + "/src\\smoke_backslash_entry.nut";
   local bare = "smoke_bare_entry.nut";
   writeText(backslash, entry);
   writeText(bare, entry);
