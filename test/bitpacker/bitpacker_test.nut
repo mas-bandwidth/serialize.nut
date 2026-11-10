@@ -262,6 +262,11 @@ function TestBitpacker() {
   local tooBig = BitWriter(blob(8));
   local nine = blob(9);
   raises(function() { tooBig.writeBytes(nine, 0, 9); }, "serialize: bit writer overflow", "a 9-byte writeBytes");
+  local badArgs = "serialize: byte array serialization requires a non-negative offset and byte count";
+  local nw = BitWriter(blob(8));
+  raises(function() { nw.writeBytes(blob(1), 0, -1); }, badArgs, "a negative writeBytes count");
+  raises(function() { nw.writeBytes(blob(1), -1, 1); }, badArgs, "a negative writeBytes offset");
+  check(nw.bitsWritten() == 0, "a refused writeBytes moved the index to " + nw.bitsWritten());
 
   // flushBits ends the write: a later writeBits or writeBytes raises, on a
   // 16-byte and an 8-byte buffer, and moves no bit. A flush that ends on a
@@ -296,4 +301,12 @@ function TestBitpacker() {
   local rr2 = BitReader(blob(1));
   raises(function() { rr2.readBytes(blob(2), 0, 2); },
     "serialize: bit reader would read past the end of the buffer", "a readBytes past the end");
+  local nr = BitReader(blob(2));
+  raises(function() { nr.readBytes(blob(2), 0, -2); }, badArgs, "a negative readBytes count");
+  raises(function() { nr.readBytes(blob(2), -1, 1); }, badArgs, "a negative readBytes offset");
+  check(nr.bitsRead() == 0, "a refused readBytes moved the index to " + nr.bitsRead());
+  local nr8 = BitReader(blob(2));
+  nr8.readBits(8);
+  raises(function() { nr8.readBytes(blob(2), 0, -2); }, badArgs, "a negative readBytes count after 8 bits");
+  check(nr8.bitsRead() == 8, "a refused readBytes moved the index to " + nr8.bitsRead());
 }
