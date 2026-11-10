@@ -1136,7 +1136,7 @@ function TestConformanceCorpusDir() {
   check(corpusRoot(root, null) == root, "an unset SERIALIZE_CORPUS_DIR is not the repository root");
   check(corpusRoot(root, "") == root, "an empty SERIALIZE_CORPUS_DIR is not the repository root");
 
-  local rel = "build/corpus-dir-unit";
+  local rel = "build/test/conformance/TestConformanceCorpusDir/corpus-dir-unit";
   local dir = root + "/" + rel;
   check(system("rm -rf '" + dir + "' && mkdir -p '" + dir + "/conformance' '" + dir + "/conformance-controls'") == 0, "could not make " + dir);
   writeBlob(dir + "/conformance/only.txt", stringToBlob("operation bits\n"));
