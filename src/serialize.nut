@@ -1,7 +1,7 @@
 // serialize.nut v2.1.2: a bitpacking serializer for Squirrel, one of the
 // serialize family (C, C++, C#, Dart, Elixir, Go, Java, JavaScript, Rust, ...),
 // which all speak one wire: the same values produce the same bytes in every
-// one. STANDARD.md (vendored verbatim from mas-bandwidth/serialize v2.1.1) is the
+// one. STANDARD.md (vendored verbatim from mas-bandwidth/serialize v2.1.3) is the
 // authority; this library implements format version 2.0 of it: the wire
 // carries only integers and bytes, and every value has exactly one encoding,
 // so a packet reader reads its top-level object and then serializeEnd. DESIGN.md is

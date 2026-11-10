@@ -334,10 +334,10 @@ function TestVersionReferences() {
   local here = read(root + "/test/bitpacker/bitpacker_test.nut");
   check(serialize.version == "v2.1.2", "the API does not export the port version v2.1.2");
   check(source.find("v2.1.2") != null, "serialize.nut does not name the port version v2.1.2");
-  check(source.find("v2.1.1") != null, "serialize.nut does not name the vendored release v2.1.1");
+  check(source.find("v2.1.3") != null, "serialize.nut does not name the vendored release v2.1.3");
   check(readme.find("v2.1.2") != null, "README.md does not name the port version v2.1.2");
-  check(readme.find("v2.1.1") != null, "README.md does not name the vendored release v2.1.1");
-  check(design.find("tag `v2.1.1`") != null, "DESIGN.md does not name the vendored release v2.1.1");
+  check(readme.find("v2.1.3") != null, "README.md does not name the vendored release v2.1.3");
+  check(design.find("tag `v2.1.3`") != null, "DESIGN.md does not name the vendored release v2.1.3");
   check(design.find("| serialize.go v2.0.0 |") != null, "DESIGN.md does not name the reference pin serialize.go v2.0.0");
   check(design.find("two 32-bit lanes") != null, "DESIGN.md does not describe the two-lane scratch");
   check(design.find("int_relative reaches") != null, "DESIGN.md does not describe int_relative's dependencies");
