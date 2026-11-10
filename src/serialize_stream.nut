@@ -182,9 +182,9 @@ class Stream {
 
   // serializeEnd(): the end of the top-level object (STANDARD.md end). On a
   // write or a measure it is a no-op returning true, emitting and costing
-  // nothing, whatever the stream's state (IMPLEMENTING.md U12; the stream's
-  // error() and flush still tell a failed write). ReadStream overrides it with
-  // the reader's end.
+  // nothing, whatever the stream's state (IMPLEMENTING.md U12; write and
+  // measure misuse traps and latches nothing, so error() stays null).
+  // ReadStream overrides it with the reader's end.
   function serializeEnd() { return true; }
 
   // serializeObject(object): object.serialize(stream) inline, no bytes of its

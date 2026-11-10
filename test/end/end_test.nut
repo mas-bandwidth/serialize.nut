@@ -9,8 +9,9 @@
 //       the last field are never examined;
 //   (2) an accepted end leaves the stream exactly consumed (8 * bytes bits), a
 //       further read of one bit is past_end, and a zero-bit read still succeeds;
-//   (3) on a write and a measure the end emits nothing and costs nothing, and a
-//       failed stream answers false.
+//   (3) on a write and a measure the end emits nothing, costs nothing and
+//       returns true; write misuse traps and latches nothing, so error() stays
+//       null.
 //
 // Reversed witnesses: without the end (format 1.1) every refused case here
 // reads green, and an end that tests padding before trailing data reports

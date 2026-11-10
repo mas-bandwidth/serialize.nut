@@ -13,13 +13,13 @@ already decides.
 |---|---|
 | the reference | `mas-bandwidth/serialize.go` tag `v2.0.0` (`a3ffd9136906dfc4db5b2fb6d146181d749b00c5`, module `github.com/mas-bandwidth/serialize.go/v2`), read, never imported by the library (the fuzz differential imports it) |
 | the closest worked example | `mas-bandwidth/serialize.js` main at `ff765a1a89a89dc3f6e818e553baabf189241b4e` (`src/index.js`, `src/streams.js`), read, never imported |
-| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.1.1` (`bd3d67e23c8acc2c45eff69633dbe16c029a2cba`: format 2.0 unchanged; standard 2.1 adds the `rejected` refusal reason, the `reject` step and the U1-U16 rules of IMPLEMENTING.md, and 2.1.1 the U3, U6, U9 and U15 rulings; the corpus is unchanged since v2.1.0; `tools/revendor.sh <tag>` re-vendors them) |
+| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.1.3` (`7bf1877b38cfdd737d0bf102a546ec2674335786`: format 2.0 unchanged; standard 2.1 adds the `rejected` refusal reason, the `reject` step and the U1-U16 rules of IMPLEMENTING.md, and 2.1.1 the U3, U6, U9 and U15 rulings; the corpus is unchanged since v2.1.0; `tools/revendor.sh <tag>` re-vendors them) |
 | the number, byte, float32 and loading rules | `mas-bandwidth/schema` `docs/PORT-SQUIRREL.md` at `f676cb9adc8a653abcdce38034e99ec3c3aad6b8`, restated in (c) to (f) with no change of substance |
 | the interpreter | Squirrel 3.2, built `sq64` with `-DSQUSEDOUBLE` (`make dist-squirrel`) |
 
 **The vendored copies are the reference's copies.** `diff -r` of this
 repository's `STANDARD.md`, `IMPLEMENTING.md`, `conformance/` and
-`conformance-controls/` against serialize v2.1.1's is empty (the corpus job in
+`conformance-controls/` against serialize v2.1.3's is empty (the corpus job in
 CI holds them to it), so the Go oracle and this port read the same 18 vector
 files and the same standard, byte for byte.
 
@@ -144,7 +144,7 @@ write flush
 write data
 ```
 
-| Squirrel | serialize.go v1.15.1 | value domain |
+| Squirrel | serialize.go v2.0.0 | value domain |
 |---|---|---|
 | `WriteStream(buffer)` | `NewWriteStream(buffer)` | `buffer` a blob, length a multiple of 8 |
 | `ReadStream(data)` | `NewReadStream(data)` | `data` a blob, any length |
@@ -257,8 +257,10 @@ Exactly C++ and Go. STANDARD.md, General Conventions, quoted:
 
 So, for this library:
 
-- the scratch is one 64-bit SQInteger, filled LSB first; a value crossing the
-  word boundary is split, its low part completing the current word;
+- the scratch is two 32-bit lanes, a low lane and a high lane, filled LSB
+  first; a value crossing the word boundary is split, its low part completing
+  the current word, so every shift count stays in [0,31] and no intermediate
+  exceeds a signed 64-bit value;
 - each full word is stored as 8 little-endian bytes composed by hand (d), on
   every host; never `writen('l')`, which is the host's order;
 - `bits > 32` is written as the low 32 bits first as a 32-bit group, then the
@@ -592,8 +594,9 @@ same way.
 | `src/serialize_compressed_float.nut` | serialize-squirrel-compressed-float | `compressedFloatParams(min, max, resolution)` returning `{ maxIntegerValue, bits, delta }` | `serializeCompressedFloat(s, h, min, max, resolution)`, `serializeCompressedFloatPrecomputed(s, h, maxIntegerValue, bits, delta, min)` |
 | `src/serialize_bytes.nut` | serialize-squirrel-strings | none | `serializeBytes(s, data)`, `serializeString(s, h, bufferSize)` |
 
-A family requires another only through `require` (the int_relative arms
-reach `serialize_int`'s, compressed_float reaches `serialize_float`'s
+A family requires another only through `require` (int_relative reaches
+`serialize_bits`' `validReadHolder` and `serialize_stream`'s `SerializeError`,
+and keeps its own `bitsRequired`; compressed_float reaches `serialize_float`'s
 `fround`, fixed, int and bits reach `serialize_int128`'s helpers and lanes). A card's own make
 targets go in its own `make/<card>.mk` (the Makefile's `-include make/*.mk`),
 and its tests in its own `test/<card>/` directory.
