@@ -263,6 +263,15 @@ local misuses = function(serialize) {
     { what = "uint128 value not a two-lane integer array", call = function(s) { return s.serializeUint128({ value = [1] }); } },
     { what = "fixed64 raw above max", call = function(s) { return s.serializeFixed64({ value = 0x7FFFFFFF }, 16, 16, -1, 1); } },
     { what = "fixed128 raw above max", call = function(s) { return s.serializeFixed128({ value = [0, 0x7FFFFFFF] }, 64, 64, -1, 1); } },
+    { what = "fixed64 value not an integer", call = function(s) { return s.serializeFixed64({ value = 1.5 }, 8, 8, 0, 1); } },
+    { what = "fixed128 value not a two-lane integer array", call = function(s) { return s.serializeFixed128({ value = [1] }, 64, 64, 0, 1); } },
+    { what = "int holder without a value", call = function(s) { return s.serializeInt({}, 0, 10); } },
+    { what = "int64 holder without a value", call = function(s) { return s.serializeInt64({}, 0, 10); } },
+    { what = "int128 holder without a value", call = function(s) { return s.serializeInt128({}, [0, 0], [10, 0]); } },
+    { what = "uint128 holder without a value", call = function(s) { return s.serializeUint128({}); } },
+    { what = "int_relative holder without a value", call = function(s) { return s.serializeIntRelative(5, {}); } },
+    { what = "fixed64 holder without a value", call = function(s) { return s.serializeFixed64({}, 8, 8, 0, 1); } },
+    { what = "fixed128 holder without a value", call = function(s) { return s.serializeFixed128({}, 64, 64, 0, 1); } },
     { what = "int_relative current not above previous", call = function(s) { return s.serializeIntRelative(5, { value = 5 }); } },
     { what = "int_relative current past int32", call = function(s) { return s.serializeIntRelative(5, { value = 0x80000000 }); } },
     { what = "int_relative current not an integer", call = function(s) { return s.serializeIntRelative(10, { value = 12.0 }); } },
@@ -348,6 +357,8 @@ function TestU9WriteMisuseTraps() {
   local afters = [
     { what = "bits", call = function(s) { return s.serializeUint8({ value = 0xCD }); } },
     { what = "bytes", call = function(s) { return s.serializeBytes(blob(1)); } },
+    { what = "zero-length bytes", call = function(s) { return s.serializeBytes(blob(0)); } },
+    { what = "empty string", call = function(s) { return s.serializeString({ value = "" }, 1); } },
   ];
   foreach (size in [ 16, 8 ]) {
     foreach (a in afters) {

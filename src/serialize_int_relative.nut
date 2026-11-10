@@ -44,7 +44,7 @@ local checkPrevious = function(previous) {
 
 local write = {};
 write.serializeIntRelative <- function(s, previous, h) {
-  if (typeof h != "table" || typeof previous != "integer" || typeof h.value != "integer") return s._fail(SerializeError.ValueOutOfRange);
+  if (typeof h != "table" || !("value" in h) || typeof previous != "integer" || typeof h.value != "integer") return s._fail(SerializeError.ValueOutOfRange);
   checkPrevious(previous);
   local current = h.value;
   // current is held in a 64-bit SQInteger, so the domain's top is checked too:
@@ -127,7 +127,7 @@ read.serializeIntRelative <- function(s, previous, h) {
 
 local measure = {};
 measure.serializeIntRelative <- function(s, previous, h) {
-  if (typeof h != "table" || typeof previous != "integer" || typeof h.value != "integer") return s._fail(SerializeError.ValueOutOfRange);
+  if (typeof h != "table" || !("value" in h) || typeof previous != "integer" || typeof h.value != "integer") return s._fail(SerializeError.ValueOutOfRange);
   checkPrevious(previous);
   local current = h.value;
   // current is held in a 64-bit SQInteger, so the domain's top is checked too:

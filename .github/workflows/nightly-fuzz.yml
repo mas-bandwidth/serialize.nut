@@ -1,5 +1,5 @@
 # serialize.nut: the nightly extended fuzz, the functional tier's long run of
-# the differential against serialize.go v2.0.0 (fuzz/differential_test.go).
+# the differential against serialize.go v2.1.1 (fuzz/differential_test.go).
 #
 # ci.yml runs the differential per push as a gate: one round of 2000 programs
 # from the FIXED seed, so a commit's CI is cheap and repeatable. That leaves

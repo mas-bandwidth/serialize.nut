@@ -1,7 +1,7 @@
-// serialize.nut v2.1.2: a bitpacking serializer for Squirrel, one of the
+// serialize.nut v2.1.3: a bitpacking serializer for Squirrel, one of the
 // serialize family (C, C++, C#, Dart, Elixir, Go, Java, JavaScript, Rust, ...),
 // which all speak one wire: the same values produce the same bytes in every
-// one. STANDARD.md (vendored verbatim from mas-bandwidth/serialize v2.1.3) is the
+// one. STANDARD.md (vendored verbatim from mas-bandwidth/serialize v2.1.4) is the
 // authority; this library implements format version 2.0 of it: the wire
 // carries only integers and bytes, and every value has exactly one encoding,
 // so a packet reader reads its top-level object and then serializeEnd. DESIGN.md is
@@ -190,6 +190,6 @@ local api = {
 // The port's own release, reachable as api.version. The delegate keeps it
 // beside the reference operations rather than inside the closed U15 export
 // list.
-api.setdelegate({ version = "v2.1.2" });
+api.setdelegate({ version = "v2.1.3" });
 
 return api;

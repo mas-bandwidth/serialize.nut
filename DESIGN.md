@@ -13,13 +13,13 @@ already decides.
 |---|---|
 | the reference | `mas-bandwidth/serialize.go` tag `v2.1.1` (`97c6825383cffe9f43af64526dea4e0ef10d1662`, module `github.com/mas-bandwidth/serialize.go/v2`), read, never imported by the library (the fuzz differential imports it) |
 | the closest worked example | `mas-bandwidth/serialize.js` main at `ff765a1a89a89dc3f6e818e553baabf189241b4e` (`src/index.js`, `src/streams.js`), read, never imported |
-| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.1.3` (`7bf1877b38cfdd737d0bf102a546ec2674335786`: format 2.0 unchanged; standard 2.1 adds the `rejected` refusal reason, the `reject` step and the U1-U16 rules of IMPLEMENTING.md, and 2.1.1 the U3, U6, U9 and U15 rulings; the corpus is unchanged since v2.1.0; `tools/revendor.sh <tag>` re-vendors them) |
+| the wire's authority | `STANDARD.md`, `IMPLEMENTING.md`, `conformance/*.txt` and `conformance-controls/`, vendored VERBATIM from `mas-bandwidth/serialize` tag `v2.1.4` (`65e43ca1fef11362300f2ca569a7177c2718f20a`: format 2.0 unchanged; standard 2.1 adds the `rejected` refusal reason, the `reject` step and the U1-U16 rules of IMPLEMENTING.md, 2.1.1 the U3, U6, U9 and U15 rulings, and 2.1.4 the U7, U11 and U16 statements; the corpus is unchanged since v2.1.0; `tools/revendor.sh <tag>` re-vendors them) |
 | the number, byte, float32 and loading rules | `mas-bandwidth/schema` `docs/PORT-SQUIRREL.md` at `f676cb9adc8a653abcdce38034e99ec3c3aad6b8`, restated in (c) to (f) with no change of substance |
 | the interpreter | Squirrel 3.2, built `sq64` with `-DSQUSEDOUBLE` (`make dist-squirrel`) |
 
 **The vendored copies are the reference's copies.** `diff -r` of this
 repository's `STANDARD.md`, `IMPLEMENTING.md`, `conformance/` and
-`conformance-controls/` against serialize v2.1.3's is empty (the corpus job in
+`conformance-controls/` against serialize v2.1.4's is empty (the corpus job in
 CI holds them to it), so the Go oracle and this port read the same 18 vector
 files and the same standard, byte for byte.
 
