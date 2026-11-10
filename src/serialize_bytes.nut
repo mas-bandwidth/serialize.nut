@@ -81,11 +81,11 @@ local writeRange = function(s, value, min, max) {
 // ReadStream.SerializeInt.
 local readRange = function(s, min, max) {
   local bits = rangeBits(min, max);
-  if (!s._room(bits)) return null;
+  if (!s._room(bits)) return { ok = false };
   local offset = bits > 0 ? s._take(bits) : 0;
   if (offset > max - min) {
     s._fail(E.ValueOutOfRange);
-    return null;
+    return { ok = false };
   }
   return min + offset;
 };
@@ -251,7 +251,7 @@ local readString = function(s, h, bufferSize) {
   if (s.error() != null) return false;
   if (!bufferSizeIsValid(bufferSize) || typeof h != "table" || !("value" in h)) return s._fail(E.ValueOutOfRange);
   local length = readRange(s, 0, bufferSize - 1);
-  if (length == null) return false;
+  if (typeof length == "table") return false;
   local align = s.alignBits();
   if (align > 0) {
     if (!s._room(align)) return false;

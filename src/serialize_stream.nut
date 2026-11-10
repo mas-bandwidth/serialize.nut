@@ -132,7 +132,7 @@ class Stream {
   function _arm(family, method) {
     local byFamily = ARMS[_kind];
     if (byFamily == null) return arm(_kind, family, method);
-    local arms = byFamily[family];
+    local arms = family in byFamily ? byFamily[family] : null;
     if (arms == null) {
       arms = {};
       byFamily[family] <- arms;
