@@ -4,7 +4,7 @@
 //   (1) every width 1..32 at every starting bit offset 0..63, against an
 //       independent bit-by-bit LSB-first oracle written here, never the code
 //       under test (STANDARD.md, General Conventions);
-//   (2) serialize.go v1.15.1's TestBitpacker sequence, byte for byte
+//   (2) serialize.go v2.0.0's TestBitpacker sequence, byte for byte
 //       (serialize_test.go in mas-bandwidth/serialize.go);
 //   (3) readBits round-trips (1);
 //   (4) a read past the end is refused by wouldReadPastEnd and raises the bit
@@ -129,7 +129,7 @@ function TestBitpacker() {
     }
   }
 
-  // (2) serialize.go v1.15.1's TestBitpacker sequence, byte for byte. The
+  // (2) serialize.go v2.0.0's TestBitpacker sequence, byte for byte. The
   // expected bytes are the sequence's 76 bits packed LSB first:
   // 2a fc a3 0f 35 fc 67 89 09 00.
   local buffer = blob(256);
@@ -309,4 +309,42 @@ function TestBitpacker() {
   nr8.readBits(8);
   raises(function() { nr8.readBytes(blob(2), 0, -2); }, badArgs, "a negative readBytes count after 8 bits");
   check(nr8.bitsRead() == 8, "a refused readBytes moved the index to " + nr8.bitsRead());
+}
+
+// TestVersionReferences: the entry, README and design name the port's own
+// version, the vendored release and the reference pin, and the comments that
+// describe the scratch, int_relative's dependencies and write/measure streams
+// match the implementation.
+function TestVersionReferences() {
+  local read = function(path) {
+    local f = file(path, "rb");
+    local b = f.readblob(f.len());
+    f.close();
+    local s = "";
+    foreach (c in b) s += c.tochar();
+    return s;
+  };
+  local root = ::SERIALIZE_ROOT;
+  local serialize = dofile(root + "/src/serialize.nut", true);
+  local source = read(root + "/src/serialize.nut");
+  local readme = read(root + "/README.md");
+  local design = read(root + "/DESIGN.md");
+  local stream = read(root + "/src/serialize_stream.nut");
+  local endTest = read(root + "/test/end/end_test.nut");
+  local here = read(root + "/test/bitpacker/bitpacker_test.nut");
+  check(serialize.version == "v2.1.2", "the API does not export the port version v2.1.2");
+  check(source.find("v2.1.2") != null, "serialize.nut does not name the port version v2.1.2");
+  check(source.find("v2.1.3") != null, "serialize.nut does not name the vendored release v2.1.3");
+  check(readme.find("v2.1.2") != null, "README.md does not name the port version v2.1.2");
+  check(readme.find("v2.1.3") != null, "README.md does not name the vendored release v2.1.3");
+  check(design.find("tag `v2.1.3`") != null, "DESIGN.md does not name the vendored release v2.1.3");
+  check(design.find("| serialize.go v2.0.0 |") != null, "DESIGN.md does not name the reference pin serialize.go v2.0.0");
+  check(design.find("two 32-bit lanes") != null, "DESIGN.md does not describe the two-lane scratch");
+  check(design.find("int_relative reaches") != null, "DESIGN.md does not describe int_relative's dependencies");
+  check(here.find("serialize.go v" + "1.15.1") == null,
+    "the bitpacker test still names an obsolete reference release");
+  check(stream.find("error() and flush still tell a failed write") == null,
+    "serialize_stream.nut still describes a failed write");
+  check(endTest.find("failed stream answers false") == null,
+    "end_test.nut still describes a failed write or measure stream");
 }
