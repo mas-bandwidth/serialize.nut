@@ -306,6 +306,28 @@ function TestU9WriteMisuseTraps() {
     check(got.len() == want.len(), "write " + m.what + ": a later write's length changed");
     for (local i = 0; i < want.len(); i++) check(got[i] == want[i], "write " + m.what + ": a later write's bytes changed");
   }
+  // a value of the wrong type traps at the call, on a write and on a measure,
+  // and moves nothing
+  local typed = [
+    { what = "int_relative current not an integer", call = function(s) { return s.serializeIntRelative(10, { value = 12.0 }); } },
+    { what = "int_relative current not an integer past int32", call = function(s) { return s.serializeIntRelative(0, { value = 100000.5 }); } },
+    { what = "int_relative previous not an integer", call = function(s) { return s.serializeIntRelative(1.5, { value = 2.5 }); } },
+    { what = "uint128 value not a two-integer array", call = function(s) { return s.serializeUint128({ value = [1] }); } },
+    { what = "int value not an integer", call = function(s) { return s.serializeInt({ value = 3.7 }, 0, 10); } },
+    { what = "int64 value not an integer", call = function(s) { return s.serializeInt64({ value = 3.7 }, 0, 10); } },
+  ];
+  foreach (m in typed) {
+    local ws = serialize.WriteStream(blob(8));
+    check(ws.serializeBits({ value = 5 }, 3), "write " + m.what + ": the lead bits");
+    traps(function() { m.call(ws); }, "write " + m.what);
+    check(ws.error() == null && ws.ok(), "write " + m.what + ": latched " + ws.error());
+    check(ws.bitsProcessed() == 3, "write " + m.what + ": wrote " + (ws.bitsProcessed() - 3) + " bits before trapping");
+    local ms = serialize.MeasureStream();
+    check(ms.serializeBits({ value = 5 }, 3), "measure " + m.what + ": the lead bits");
+    traps(function() { m.call(ms); }, "measure " + m.what);
+    check(ms.error() == null && ms.ok(), "measure " + m.what + ": latched " + ms.error());
+    check(ms.bitsProcessed() == 3, "measure " + m.what + ": charged " + (ms.bitsProcessed() - 3) + " bits before trapping");
+  }
   // U10: an operation that does not fit the room left traps, whole, with
   // nothing written; the buffer still takes what fits after it
   local rooms = [
