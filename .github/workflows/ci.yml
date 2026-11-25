@@ -71,7 +71,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: fuzz/go.mod
-          cache-dependency-path: fuzz/go.sum
+          cache: false
 
       - name: Fuzz, only when there is fuzz code
         if: ${{ hashFiles('fuzz/go.mod') != '' }}

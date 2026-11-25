@@ -99,6 +99,18 @@ check_file() {
 		rc=1
 	fi
 
+	# THE GO CACHE: setup-go caches by default, and on the fleet runners the
+	# cached directories are the host's shared Go caches, so every run tars
+	# and uploads the whole bench cache. Every setup-go step must set cache: false.
+	while IFS= read -r match; do
+		ln=${match%%:*}
+		block=$(awk -v start="$ln" 'NR>=start { if (NR>start && /^[[:space:]]*- /) exit; print }' "$file")
+		if ! grep -qE '^[[:space:]]*cache:[[:space:]]*false[[:space:]]*$' <<<"$block"; then
+			echo "--- FAIL TestCheckCI ($file:$ln: setup-go step must set cache: false)"
+			rc=1
+		fi
+	done < <(grep -nE 'uses:[[:space:]]*actions/setup-go@' "$file" || true)
+
 	return "$rc"
 }
 
@@ -164,6 +176,18 @@ if [ "$control_rc" -eq 0 ]; then
 	exit 1
 fi
 echo "control: a scratch ci.yml without make test-ubsan fails as it must:"
+printf '%s\n' "$control" | sed 's/^/  /'
+
+# THE GO CACHE CONTROL. A scratch ci.yml with the cache: false line removed
+# must be red.
+sed '/^[[:space:]]*cache:[[:space:]]*false[[:space:]]*$/d' "$ci" > "$scratch/ci-no-go-cache.yml"
+control_rc=0
+control=$(check_file "$scratch/ci-no-go-cache.yml") || control_rc=$?
+if [ "$control_rc" -eq 0 ]; then
+	echo "--- FAIL TestCheckCI (control: a scratch ci.yml without cache: false was accepted)"
+	exit 1
+fi
+echo "control: a scratch ci.yml without cache: false fails as it must:"
 printf '%s\n' "$control" | sed 's/^/  /'
 
 if ! check_file "$ci"; then
