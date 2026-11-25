@@ -181,3 +181,24 @@ function TestSmoke() {
     "the measure charged " + mf.bitsProcessed() + " bits, reason " + mf.error());
   raises(function() { serialize.WriteStream(blob(12)); }, "serialize: bit writer buffer size must be a multiple of 8 bytes", "a 12-byte buffer");
 }
+
+function TestModuleVMRefusal() {
+  local root = ::SERIALIZE_ROOT;
+  local srcRequire;
+  srcRequire = function(name, who = null) {
+    local m = {};
+    loadfile(root + "/src/" + name + ".nut", true).bindenv(::getroottable())(m, srcRequire);
+    return m;
+  };
+  local savedFloat = _floatsize_;
+  _floatsize_ = 4;
+  local floatGot = null;
+  local streamGot = null;
+  try { srcRequire("serialize_float"); } catch (e) { floatGot = e; }
+  try { srcRequire("serialize_stream"); } catch (e) { streamGot = e; }
+  _floatsize_ = savedFloat;
+  check(floatGot != null && typeof floatGot == "string" && floatGot.slice(0, 34) == "serialize: refuses this VM",
+    "the float module loaded without the guard: " + floatGot);
+  check(streamGot != null && typeof streamGot == "string" && streamGot.slice(0, 34) == "serialize: refuses this VM",
+    "the stream module loaded without the guard: " + streamGot);
+}
